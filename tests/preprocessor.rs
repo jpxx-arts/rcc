@@ -84,10 +84,10 @@ mod remove_unnecessary_white_spaces {
     }
 
     #[test]
-    fn only_whitespace_collapses_to_empty() {
+    fn only_whitespace_keeps_newlines() {
         assert_eq!(
             preprocessor::remove_unnecessary_white_spaces("   \t\n  "),
-            ""
+            "\n"
         );
     }
 
@@ -113,10 +113,10 @@ mod remove_unnecessary_white_spaces {
     }
 
     #[test]
-    fn newline_between_words_becomes_space() {
+    fn newline_between_words_preserved() {
         assert_eq!(
             preprocessor::remove_unnecessary_white_spaces("int\nx"),
-            "int x"
+            "int\nx"
         );
     }
 

@@ -14,7 +14,7 @@ pub fn remove_comments(src: &str) -> String {
 
 pub fn remove_unnecessary_white_spaces(src: &str) -> String {
     // first we define the meaningfully white space pattern
-    let re = Regex::new(r"(?<end_char>[[:word:]])[[:space:]]+(?<start_char>[[:word:]])")
+    let re = Regex::new(r"(?<end_char>[[:word:]])[[:space:]--\n]+(?<start_char>[[:word:]])")
         .expect("Incorrect regex pattern");
 
     // \x1A (26) is a control code from ascii table for [SUBSTITUTE]
@@ -32,7 +32,7 @@ pub fn remove_unnecessary_white_spaces(src: &str) -> String {
         output = next;
     }
 
-    let re = Regex::new("[[:space:]]+").expect("Incorrect regex pattern");
+    let re = Regex::new("[[:space:]--\n]+").expect("Incorrect regex pattern");
     let output: String = re.replace_all(&output, "").into();
 
     let output = output.replace(substitute, " ");
