@@ -6,7 +6,8 @@ pub fn remove_comments(src: &str) -> String {
      * the s flag is used to . matches to \n
      * the m flag is used to indicate $ as end of line
      */
-    let re = Regex::new(r"(?x)/\*(?s:.*?)\*/ | //.*(?m:$)").expect("Incorrect regex pattern");
+    let re = Regex::new(r"(?x)/\*(?s:.*?)\*/ | //.*(?m:$)")
+        .expect("Preprocessor - Comment Regex Failed");
     let output: String = re.replace_all(src, "").into();
 
     output
@@ -15,7 +16,7 @@ pub fn remove_comments(src: &str) -> String {
 pub fn remove_unnecessary_white_spaces(src: &str) -> String {
     // first we define the meaningfully white space pattern
     let re = Regex::new(r"(?<end_char>[[:word:]])[[:space:]--\n]+(?<start_char>[[:word:]])")
-        .expect("Incorrect regex pattern");
+        .expect("Preprocessor - Meaningfully White Space Regex Failed");
 
     // \x1A (26) is a control code from ascii table for [SUBSTITUTE]
     let substitute = '\x1A';
@@ -32,7 +33,7 @@ pub fn remove_unnecessary_white_spaces(src: &str) -> String {
         output = next;
     }
 
-    let re = Regex::new("[[:space:]--\n]+").expect("Incorrect regex pattern");
+    let re = Regex::new("[[:space:]--\n]+").expect("Preprocessor - White Space Regex Failed");
     let output: String = re.replace_all(&output, "").into();
 
     let output = output.replace(substitute, " ");
