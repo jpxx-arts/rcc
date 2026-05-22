@@ -90,15 +90,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_op(&mut self, lex: &str) -> Result<(), ParseError> {
-        if Self::is_op_str(self.peek(), lex) {
-            self.advance();
-            Ok(())
-        } else {
-            Err(self.error(format!("expected operator '{lex}'")))
-        }
-    }
-
     fn expect_id(&mut self) -> Result<(), ParseError> {
         if Self::is_id(self.peek()) {
             self.advance();
