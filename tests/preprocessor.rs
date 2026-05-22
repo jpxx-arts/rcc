@@ -1,77 +1,96 @@
-use rcc::preprocessor;
+use rcc::preprocessor::{self, PreprocessError};
 
 mod remove_comments {
     use super::*;
 
     #[test]
     fn empty_input() {
-        assert_eq!(preprocessor::remove_comments(""), "");
+        assert_eq!(preprocessor::remove_comments("").unwrap(), "");
     }
 
     #[test]
     fn only_code() {
         let src = "int x = 1;";
-        assert_eq!(preprocessor::remove_comments(src), src);
+        assert_eq!(preprocessor::remove_comments(src).unwrap(), src);
     }
 
     #[test]
     fn only_block_comment() {
-        assert_eq!(preprocessor::remove_comments("/* hello */"), "");
+        assert_eq!(preprocessor::remove_comments("/* hello */").unwrap(), "");
     }
 
     #[test]
     fn only_line_comment() {
-        assert_eq!(preprocessor::remove_comments("// hello"), "");
+        assert_eq!(preprocessor::remove_comments("// hello").unwrap(), "");
     }
 
     #[test]
     fn empty_block_comment() {
-        assert_eq!(preprocessor::remove_comments("/**/"), "");
+        assert_eq!(preprocessor::remove_comments("/**/").unwrap(), "");
     }
 
     #[test]
-    fn block_comment_with_newlines() {
-        assert_eq!(preprocessor::remove_comments("/* a\nb\nc */"), "");
+    fn block_comment_preserves_newlines() {
+        // multi-line block comments now leave behind their newline count so
+        // downstream phases can keep accurate line numbers.
+        assert_eq!(
+            preprocessor::remove_comments("/* a\nb\nc */").unwrap(),
+            "\n\n"
+        );
     }
 
     #[test]
     fn line_comment_without_trailing_newline() {
-        assert_eq!(preprocessor::remove_comments("// fim"), "");
+        assert_eq!(preprocessor::remove_comments("// fim").unwrap(), "");
     }
 
     #[test]
     fn line_marker_inside_block_is_text() {
-        assert_eq!(preprocessor::remove_comments("/* // ainda bloco */"), "");
+        assert_eq!(
+            preprocessor::remove_comments("/* // ainda bloco */").unwrap(),
+            ""
+        );
     }
 
     #[test]
     fn block_marker_inside_line_is_text() {
         let src = "// /* texto na linha\nresto";
-        assert_eq!(preprocessor::remove_comments(src), "\nresto");
+        assert_eq!(preprocessor::remove_comments(src).unwrap(), "\nresto");
     }
 
     #[test]
     fn multiple_block_comments_dont_merge() {
         let src = "a /* b */ c /* d */ e";
-        assert_eq!(preprocessor::remove_comments(src), "a  c  e");
+        assert_eq!(preprocessor::remove_comments(src).unwrap(), "a  c  e");
     }
 
     #[test]
     fn block_comment_between_code() {
         let src = "int /* tipo */ x;";
-        assert_eq!(preprocessor::remove_comments(src), "int  x;");
+        assert_eq!(preprocessor::remove_comments(src).unwrap(), "int  x;");
     }
 
     #[test]
     fn line_comment_at_end_of_code_line() {
         let src = "int x; // anotação\nint y;";
-        assert_eq!(preprocessor::remove_comments(src), "int x; \nint y;");
+        assert_eq!(
+            preprocessor::remove_comments(src).unwrap(),
+            "int x; \nint y;"
+        );
     }
 
     #[test]
-    fn unclosed_block_comment_currently_unchanged() {
-        let src = "codigo /* sem fim";
-        assert_eq!(preprocessor::remove_comments(src), src);
+    fn unclosed_block_comment_reports_line() {
+        let src = "codigo\nmais codigo\n/* sem fim";
+        let err = preprocessor::remove_comments(src).unwrap_err();
+        assert_eq!(err, PreprocessError::UnclosedBlockComment { line: 3 });
+    }
+
+    #[test]
+    fn unclosed_block_comment_on_first_line() {
+        let src = "/* sem fim";
+        let err = preprocessor::remove_comments(src).unwrap_err();
+        assert_eq!(err, PreprocessError::UnclosedBlockComment { line: 1 });
     }
 }
 
@@ -232,7 +251,7 @@ mod end_to_end {
             std::fs::read_to_string("specs/prog-bubblesort.ling").expect("fixture should exist");
         let expected = std::fs::read_to_string("specs/prog-bubblesort.expected")
             .expect("fixture should exist");
-        let actual = preprocessor::preprocess(&src);
+        let actual = preprocessor::preprocess(&src).expect("preprocess should succeed");
         assert_eq!(
             actual.trim_end_matches('\n'),
             expected.trim_end_matches('\n')
@@ -245,7 +264,7 @@ mod end_to_end {
             std::fs::read_to_string("specs/prog-factorial.ling").expect("fixture should exist");
         let expected =
             std::fs::read_to_string("specs/prog-factorial.expected").expect("fixture should exist");
-        let actual = preprocessor::preprocess(&src);
+        let actual = preprocessor::preprocess(&src).expect("preprocess should succeed");
         assert_eq!(
             actual.trim_end_matches('\n'),
             expected.trim_end_matches('\n')
