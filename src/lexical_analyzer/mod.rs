@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 const KEYWORDS_PATTERN: &str = "^(class|public|extends|else|int|static|void|main|String|return|boolean|if|while|System|out|println|length|new|true|false|this)$";
-const OPERATIONS_PATTERN: &str = r"^(\&\&|>|\+|\-|\*|\!)$";
+const OPERATIONS_PATTERN: &str = r"^(\&\&|<|>|\+|\-|\*|\!)$";
 const DELIMITERS_PATTERN: &str = r"^(\{|\}|\(|\)|\[|\]|;|,|\.|=)$";
 
 /// Flat list of reserved words, used both for the keyword regex and for
@@ -14,7 +14,11 @@ pub const KEYWORDS_LIST: &[&str] = &[
 ];
 
 static ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?x)^ [[:alpha:]] ([[:digit:]] | [[:alpha:]])* _? $")
+    // Identifier: starts with alpha, then any of (alpha|digit|_) zero or more
+    // times. The original grammar restricts `_` to the trailing position
+    // (Word's terminal `_` alternative), but the test fixtures rely on the
+    // permissive C/Java-style form (e.g. `num_aux`, `aux01`).
+    Regex::new(r"^[[:alpha:]]([[:digit:]]|[[:alpha:]]|_)*$")
         .expect("Lexical Analyzer - Id Regex Failed")
 });
 static NUMBER_REGEX: LazyLock<Regex> =
