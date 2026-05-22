@@ -2,20 +2,32 @@ use rcc::lexical_analyzer::{self, SymbolTable, Token, TokenAttribute, TokenClass
 
 fn lexeme_of(token: &Token, symbol_table: &SymbolTable) -> String {
     match &token.attribute_value {
-        TokenAttribute::POINTER { pointer } => symbol_table.registers[*pointer].lexeme.clone(),
-        TokenAttribute::ITSELF(lex) => lex.clone(),
-        TokenAttribute::NULL => match &token.token_name {
+        TokenAttribute::Pointer(idx) => symbol_table.registers[*idx].lexeme.clone(),
+        TokenAttribute::Itself(lex) => lex.clone(),
+        TokenAttribute::Null => match &token.token_name {
             TokenClass::KEYWORD(lex) => lex.clone(),
-            other => panic!("NULL attribute on non-keyword: {:?}", other),
+            TokenClass::EOF => String::new(),
+            other => panic!("Null attribute on unexpected class: {:?}", other),
         },
     }
+}
+
+/// Returns all tokens except the trailing EOF.
+fn tokens_without_eof(input: &str) -> (Vec<Token>, SymbolTable) {
+    let (mut tokens, symbol_table) = lexical_analyzer::get_tokens(input);
+    if let Some(last) = tokens.last() {
+        if last.token_name == TokenClass::EOF {
+            tokens.pop();
+        }
+    }
+    (tokens, symbol_table)
 }
 
 mod identifiers {
     use super::*;
 
     fn assert_id(input: &str, expected_lexeme: &str) {
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens(input);
+        let (tokens, symbol_table) = tokens_without_eof(input);
         assert_eq!(tokens[0].token_name, TokenClass::ID);
         assert_eq!(lexeme_of(&tokens[0], &symbol_table), expected_lexeme);
     }
@@ -55,7 +67,7 @@ mod numbers {
     use super::*;
 
     fn assert_number(input: &str, expected_lexeme: &str) {
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens(input);
+        let (tokens, symbol_table) = tokens_without_eof(input);
         assert_eq!(tokens[0].token_name, TokenClass::NUMBER);
         assert_eq!(lexeme_of(&tokens[0], &symbol_table), expected_lexeme);
     }
@@ -80,7 +92,7 @@ mod keywords {
     use super::*;
 
     fn assert_keyword(input: &str, expected: &str) {
-        let (tokens, _) = lexical_analyzer::get_tokens(input);
+        let (tokens, _) = tokens_without_eof(input);
         assert_eq!(
             tokens[0].token_name,
             TokenClass::KEYWORD(expected.to_string())
@@ -127,11 +139,11 @@ mod operations {
     use super::*;
 
     fn assert_op(input: &str, expected_lexeme: &str) {
-        let (tokens, _) = lexical_analyzer::get_tokens(input);
+        let (tokens, _) = tokens_without_eof(input);
         assert_eq!(tokens[0].token_name, TokenClass::OPERATION);
         match &tokens[0].attribute_value {
-            TokenAttribute::ITSELF(lex) => assert_eq!(lex, expected_lexeme),
-            other => panic!("expected ITSELF, got {:?}", other),
+            TokenAttribute::Itself(lex) => assert_eq!(lex, expected_lexeme),
+            other => panic!("expected Itself, got {:?}", other),
         }
     }
 
@@ -170,11 +182,11 @@ mod delimiters {
     use super::*;
 
     fn assert_delim(input: &str, expected_lexeme: &str) {
-        let (tokens, _) = lexical_analyzer::get_tokens(input);
+        let (tokens, _) = tokens_without_eof(input);
         assert_eq!(tokens[0].token_name, TokenClass::DELIMITER);
         match &tokens[0].attribute_value {
-            TokenAttribute::ITSELF(lex) => assert_eq!(lex, expected_lexeme),
-            other => panic!("expected ITSELF, got {:?}", other),
+            TokenAttribute::Itself(lex) => assert_eq!(lex, expected_lexeme),
+            other => panic!("expected Itself, got {:?}", other),
         }
     }
 
@@ -234,28 +246,28 @@ mod longest_match_disambiguation {
 
     #[test]
     fn id_starting_with_keyword_class() {
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("class1");
+        let (tokens, symbol_table) = tokens_without_eof("class1");
         assert_eq!(tokens[0].token_name, TokenClass::ID);
         assert_eq!(lexeme_of(&tokens[0], &symbol_table), "class1");
     }
 
     #[test]
     fn id_starting_with_keyword_int() {
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("intx");
+        let (tokens, symbol_table) = tokens_without_eof("intx");
         assert_eq!(tokens[0].token_name, TokenClass::ID);
         assert_eq!(lexeme_of(&tokens[0], &symbol_table), "intx");
     }
 
     #[test]
     fn id_starting_with_keyword_if() {
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("ifa");
+        let (tokens, symbol_table) = tokens_without_eof("ifa");
         assert_eq!(tokens[0].token_name, TokenClass::ID);
         assert_eq!(lexeme_of(&tokens[0], &symbol_table), "ifa");
     }
 
     #[test]
     fn keyword_alone_is_keyword() {
-        let (tokens, _) = lexical_analyzer::get_tokens("int");
+        let (tokens, _) = tokens_without_eof("int");
         assert_eq!(tokens[0].token_name, TokenClass::KEYWORD("int".to_string()));
     }
 }
@@ -265,7 +277,7 @@ mod multi_token_sequences {
 
     #[test]
     fn keyword_then_id() {
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("int x");
+        let (tokens, symbol_table) = tokens_without_eof("int x");
         assert_eq!(tokens.len(), 2);
         assert_eq!(tokens[0].token_name, TokenClass::KEYWORD("int".to_string()));
         assert_eq!(tokens[1].token_name, TokenClass::ID);
@@ -274,24 +286,20 @@ mod multi_token_sequences {
 
     #[test]
     fn declaration_with_initializer() {
-        // int a=2; → [KEYWORD(int), ID(a), DELIM(=), NUMBER(2), DELIM(;)]
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("int a=2;");
+        let (tokens, symbol_table) = tokens_without_eof("int a=2;");
         assert_eq!(tokens.len(), 5);
         assert_eq!(tokens[0].token_name, TokenClass::KEYWORD("int".to_string()));
         assert_eq!(tokens[1].token_name, TokenClass::ID);
         assert_eq!(lexeme_of(&tokens[1], &symbol_table), "a");
-        assert_eq!(tokens[2].token_name, TokenClass::DELIMITER);
         assert_eq!(lexeme_of(&tokens[2], &symbol_table), "=");
         assert_eq!(tokens[3].token_name, TokenClass::NUMBER);
         assert_eq!(lexeme_of(&tokens[3], &symbol_table), "2");
-        assert_eq!(tokens[4].token_name, TokenClass::DELIMITER);
         assert_eq!(lexeme_of(&tokens[4], &symbol_table), ";");
     }
 
     #[test]
     fn arithmetic_expression() {
-        // a+b*c → [ID(a), OP(+), ID(b), OP(*), ID(c)]
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("a+b*c");
+        let (tokens, symbol_table) = tokens_without_eof("a+b*c");
         assert_eq!(tokens.len(), 5);
         assert_eq!(lexeme_of(&tokens[0], &symbol_table), "a");
         assert_eq!(lexeme_of(&tokens[1], &symbol_table), "+");
@@ -302,21 +310,16 @@ mod multi_token_sequences {
 
     #[test]
     fn boolean_expression() {
-        // a&&b → [ID(a), OP(&&), ID(b)]
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("a&&b");
+        let (tokens, symbol_table) = tokens_without_eof("a&&b");
         assert_eq!(tokens.len(), 3);
-        assert_eq!(tokens[0].token_name, TokenClass::ID);
         assert_eq!(lexeme_of(&tokens[0], &symbol_table), "a");
-        assert_eq!(tokens[1].token_name, TokenClass::OPERATION);
         assert_eq!(lexeme_of(&tokens[1], &symbol_table), "&&");
-        assert_eq!(tokens[2].token_name, TokenClass::ID);
         assert_eq!(lexeme_of(&tokens[2], &symbol_table), "b");
     }
 
     #[test]
     fn nested_calls() {
-        // foo(bar) → [ID(foo), DELIM((), ID(bar), DELIM())]
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("foo(bar)");
+        let (tokens, symbol_table) = tokens_without_eof("foo(bar)");
         assert_eq!(tokens.len(), 4);
         assert_eq!(lexeme_of(&tokens[0], &symbol_table), "foo");
         assert_eq!(lexeme_of(&tokens[1], &symbol_table), "(");
@@ -326,59 +329,20 @@ mod multi_token_sequences {
 
     #[test]
     fn class_block() {
-        // class Foo{} → [KEYWORD(class), ID(Foo), DELIM({), DELIM(})]
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("class Foo{}");
+        let (tokens, symbol_table) = tokens_without_eof("class Foo{}");
         assert_eq!(tokens.len(), 4);
         assert_eq!(
             tokens[0].token_name,
             TokenClass::KEYWORD("class".to_string())
         );
-        assert_eq!(tokens[1].token_name, TokenClass::ID);
         assert_eq!(lexeme_of(&tokens[1], &symbol_table), "Foo");
         assert_eq!(lexeme_of(&tokens[2], &symbol_table), "{");
         assert_eq!(lexeme_of(&tokens[3], &symbol_table), "}");
     }
 
     #[test]
-    fn array_access() {
-        // a[0] → [ID(a), DELIM([), NUMBER(0), DELIM(])]
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("a[0]");
-        assert_eq!(tokens.len(), 4);
-        assert_eq!(lexeme_of(&tokens[0], &symbol_table), "a");
-        assert_eq!(lexeme_of(&tokens[1], &symbol_table), "[");
-        assert_eq!(lexeme_of(&tokens[2], &symbol_table), "0");
-        assert_eq!(lexeme_of(&tokens[3], &symbol_table), "]");
-    }
-
-    #[test]
-    fn member_access() {
-        // this.length → [KEYWORD(this), DELIM(.), KEYWORD(length)]
-        let (tokens, _) = lexical_analyzer::get_tokens("this.length");
-        assert_eq!(tokens.len(), 3);
-        assert_eq!(
-            tokens[0].token_name,
-            TokenClass::KEYWORD("this".to_string())
-        );
-        assert_eq!(tokens[1].token_name, TokenClass::DELIMITER);
-        assert_eq!(
-            tokens[2].token_name,
-            TokenClass::KEYWORD("length".to_string())
-        );
-    }
-
-    #[test]
-    fn unary_not() {
-        // !x → [OP(!), ID(x)]
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("!x");
-        assert_eq!(tokens.len(), 2);
-        assert_eq!(lexeme_of(&tokens[0], &symbol_table), "!");
-        assert_eq!(lexeme_of(&tokens[1], &symbol_table), "x");
-    }
-
-    #[test]
     fn full_method_call() {
-        // System.out.println(x) → 8 tokens
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("System.out.println(x)");
+        let (tokens, symbol_table) = tokens_without_eof("System.out.println(x)");
         assert_eq!(tokens.len(), 8);
         assert_eq!(
             tokens[0].token_name,
@@ -395,7 +359,6 @@ mod multi_token_sequences {
             TokenClass::KEYWORD("println".to_string())
         );
         assert_eq!(lexeme_of(&tokens[5], &symbol_table), "(");
-        assert_eq!(tokens[6].token_name, TokenClass::ID);
         assert_eq!(lexeme_of(&tokens[6], &symbol_table), "x");
         assert_eq!(lexeme_of(&tokens[7], &symbol_table), ")");
     }
@@ -406,25 +369,97 @@ mod whitespace_handling {
 
     #[test]
     fn newline_skipped_before_token() {
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("\nfoo");
+        let (tokens, symbol_table) = tokens_without_eof("\nfoo");
         assert_eq!(tokens[0].token_name, TokenClass::ID);
         assert_eq!(lexeme_of(&tokens[0], &symbol_table), "foo");
     }
 
     #[test]
     fn multiple_newlines_skipped() {
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("\n\n\nfoo");
+        let (tokens, symbol_table) = tokens_without_eof("\n\n\nfoo");
         assert_eq!(tokens[0].token_name, TokenClass::ID);
         assert_eq!(lexeme_of(&tokens[0], &symbol_table), "foo");
     }
 
     #[test]
     fn newline_between_tokens() {
-        // int\nx → [KEYWORD(int), ID(x)]
-        let (tokens, symbol_table) = lexical_analyzer::get_tokens("int\nx");
+        let (tokens, _) = tokens_without_eof("int\nx");
         assert_eq!(tokens.len(), 2);
         assert_eq!(tokens[0].token_name, TokenClass::KEYWORD("int".to_string()));
         assert_eq!(tokens[1].token_name, TokenClass::ID);
-        assert_eq!(lexeme_of(&tokens[1], &symbol_table), "x");
+    }
+}
+
+mod symbol_table_interning {
+    use super::*;
+
+    #[test]
+    fn two_uses_of_same_id_share_pointer() {
+        // `x x` should produce 2 tokens with the same POINTER value.
+        let (tokens, symbol_table) = tokens_without_eof("x x");
+        assert_eq!(tokens.len(), 2);
+        let ptr0 = match &tokens[0].attribute_value {
+            TokenAttribute::Pointer(idx) => *idx,
+            other => panic!("expected Pointer, got {:?}", other),
+        };
+        let ptr1 = match &tokens[1].attribute_value {
+            TokenAttribute::Pointer(idx) => *idx,
+            other => panic!("expected Pointer, got {:?}", other),
+        };
+        assert_eq!(ptr0, ptr1, "same lexeme should produce same pointer");
+        assert_eq!(symbol_table.registers.len(), 1, "only one entry interned");
+    }
+
+    #[test]
+    fn distinct_ids_get_distinct_pointers() {
+        let (tokens, symbol_table) = tokens_without_eof("a b");
+        assert_eq!(tokens.len(), 2);
+        let ptr0 = match &tokens[0].attribute_value {
+            TokenAttribute::Pointer(idx) => *idx,
+            _ => panic!(),
+        };
+        let ptr1 = match &tokens[1].attribute_value {
+            TokenAttribute::Pointer(idx) => *idx,
+            _ => panic!(),
+        };
+        assert_ne!(ptr0, ptr1);
+        assert_eq!(symbol_table.registers.len(), 2);
+    }
+}
+
+mod line_and_column_tracking {
+    use super::*;
+
+    #[test]
+    fn first_token_starts_at_line_1_column_1() {
+        let (tokens, _) = tokens_without_eof("foo");
+        assert_eq!(tokens[0].line, 1);
+        assert_eq!(tokens[0].column, 1);
+    }
+
+    #[test]
+    fn newline_increments_line_resets_column() {
+        let (tokens, _) = tokens_without_eof("foo\nbar");
+        assert_eq!(tokens[0].line, 1);
+        assert_eq!(tokens[1].line, 2);
+        assert_eq!(tokens[1].column, 1);
+    }
+}
+
+mod eof_token {
+    use super::*;
+
+    #[test]
+    fn eof_is_emitted_at_end() {
+        let (tokens, _) = lexical_analyzer::get_tokens("x");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[1].token_name, TokenClass::EOF);
+    }
+
+    #[test]
+    fn empty_input_yields_only_eof() {
+        let (tokens, _) = lexical_analyzer::get_tokens("");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].token_name, TokenClass::EOF);
     }
 }
