@@ -11,15 +11,12 @@ static ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 });
 static NUMBER_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("^[[:digit:]]+$").expect("Lexical Analyzer - Number Regex Failed"));
-static KEYWORD_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!("{KEYWORDS}")).expect("Lexical Analyzer - Keyword Regex Failed")
-});
-static OPERATION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!("{OPERATIONS}")).expect("Lexical Analyzer - Operations Regex Failed")
-});
-static DELIMITER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!("{DELIMITERS}")).expect("Lexical Analyzer - Delimiters Regex Failed")
-});
+static KEYWORD_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(KEYWORDS).expect("Lexical Analyzer - Keyword Regex Failed"));
+static OPERATION_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(OPERATIONS).expect("Lexical Analyzer - Operations Regex Failed"));
+static DELIMITER_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(DELIMITERS).expect("Lexical Analyzer - Delimiters Regex Failed"));
 
 #[derive(Debug, Clone)]
 pub struct Token {
@@ -60,8 +57,9 @@ impl SymbolTable {
 }
 
 #[derive(Debug)]
-pub struct ErrorUnrecognizedLexeme {
+pub struct ErrorUnrecognizedWord {
     line: usize,
+    column: usize,
     msg: String,
 }
 
@@ -72,6 +70,7 @@ pub enum TokenClass {
     KEYWORD(String),
     OPERATION,
     DELIMITER,
+    EOF,
     UNKNOWN,
 }
 
@@ -79,7 +78,8 @@ pub fn get_tokens(src: &str) -> (Vec<Token>, SymbolTable) {
     let mut tokens = Vec::new();
     let mut symbol_table = SymbolTable::new();
 
-    let mut line_count = 0;
+    let mut line_count = 1;
+    let mut column_count = 0;
 
     let mut previous_location = 0;
     while previous_location < src.len() {
@@ -87,13 +87,17 @@ pub fn get_tokens(src: &str) -> (Vec<Token>, SymbolTable) {
             &src[previous_location..src.len()],
             &mut symbol_table,
             &mut line_count,
+            &mut column_count,
         ) {
             Ok((token, lexeme_len)) => {
                 tokens.push(token);
                 previous_location += lexeme_len;
             }
             Err(err) => {
-                eprintln!("Lexical error at line {}: {}", err.line, err.msg);
+                eprintln!(
+                    "Lexical error at line {}, column: {}: {}",
+                    err.line, err.column, err.msg
+                );
                 return (tokens, symbol_table);
             }
         };
@@ -106,22 +110,36 @@ pub fn get_token(
     src: &str,
     symbol_table: &mut SymbolTable,
     line_count: &mut usize,
-) -> Result<(Token, usize), ErrorUnrecognizedLexeme> {
+    column_count: &mut usize,
+) -> Result<(Token, usize), ErrorUnrecognizedWord> {
     let mut lexeme = String::new();
     let mut consumed: usize = 0;
 
     let mut token_class = TokenClass::UNKNOWN;
     for c in src.chars() {
         consumed += c.len_utf8();
+        *column_count += 1;
 
         match c {
             '\n' => {
-                *line_count += 1;
                 if lexeme.is_empty() {
+                    *line_count += 1;
+
                     continue;
                 }
-                return match build_token(&lexeme, &token_class, symbol_table, *line_count) {
-                    Ok(token) => Ok((token, consumed)),
+                return match build_token(
+                    &lexeme,
+                    &token_class,
+                    symbol_table,
+                    *line_count,
+                    *column_count,
+                ) {
+                    Ok(token) => {
+                        *line_count += 1;
+                        *column_count = 0;
+
+                        Ok((token, consumed))
+                    }
                     Err(err) => Err(err),
                 };
             }
@@ -129,7 +147,13 @@ pub fn get_token(
                 if lexeme.is_empty() {
                     continue;
                 }
-                return match build_token(&lexeme, &token_class, symbol_table, *line_count) {
+                return match build_token(
+                    &lexeme,
+                    &token_class,
+                    symbol_table,
+                    *line_count,
+                    *column_count,
+                ) {
                     Ok(token) => Ok((token, consumed)),
                     Err(err) => Err(err),
                 };
@@ -154,14 +178,30 @@ pub fn get_token(
         } else {
             lexeme.pop();
             consumed -= c.len_utf8();
-            return match build_token(&lexeme, &token_class, symbol_table, *line_count) {
+            return match build_token(
+                &lexeme,
+                &token_class,
+                symbol_table,
+                *line_count,
+                *column_count,
+            ) {
                 Ok(token) => Ok((token, consumed)),
                 Err(err) => Err(err),
             };
         }
     }
 
-    return match build_token(&lexeme, &token_class, symbol_table, *line_count) {
+    if lexeme.is_empty() {
+        token_class = TokenClass::EOF;
+    }
+
+    return match build_token(
+        &lexeme,
+        &token_class,
+        symbol_table,
+        *line_count,
+        *column_count,
+    ) {
         Ok(token) => Ok((token, consumed)),
         Err(err) => Err(err),
     };
@@ -172,7 +212,8 @@ fn build_token(
     token_class: &TokenClass,
     symbol_table: &mut SymbolTable,
     line_count: usize,
-) -> Result<Token, ErrorUnrecognizedLexeme> {
+    column_count: usize,
+) -> Result<Token, ErrorUnrecognizedWord> {
     let lexeme_name: String = lexeme.to_string();
     match token_class {
         TokenClass::ID => {
@@ -237,10 +278,19 @@ fn build_token(
 
             return Ok(token);
         }
+        TokenClass::EOF => {
+            let token = Token {
+                token_name: TokenClass::EOF,
+                attribute_value: TokenAttribute::NULL,
+            };
+
+            return Ok(token);
+        }
         TokenClass::UNKNOWN => {
-            return Err(ErrorUnrecognizedLexeme {
+            return Err(ErrorUnrecognizedWord {
                 line: line_count,
-                msg: format!("Unknown lexeme: {lexeme}"),
+                column: column_count,
+                msg: format!("Unknown word: {lexeme}"),
             });
         }
     }
