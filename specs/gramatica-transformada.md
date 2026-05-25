@@ -5,7 +5,10 @@ fatoração à esquerda, conforme o item 1 da spec do trabalho.
 
 ## Mudanças
 
-1. **`Exp` linha-recursivo** virou `ExpBase ExpRest` (esquema padrão para `A → A α | β`).
+1. **`Exp` left-recursivo** estratificado em níveis de precedência
+   (`ExpAnd → ExpRel → ExpAdd → ExpMul → ExpUnary → ExpPostfix → ExpPrimary`),
+   eliminando a recursão à esquerda e preservando a precedência
+   matemática (`*` > `+` > `<,>` > `&&`).
 2. **Sequências de comandos** — a gramática original tem `MainC` e `DefMet` com
    apenas um único `Cmd` no corpo; isso impede `bubblesort.ling` de parsear (vários
    statements consecutivos). Introduzido o não-terminal `Cmds` para sequências.
@@ -64,29 +67,38 @@ Cmd        → '{' Cmds '}'
 CmdIdRest  → '=' Exp ';'
            | '[' Exp ']' '=' Exp ';'
 
-Exp        → ExpBase ExpRest
+Exp        → ExpAnd
 
-ExpBase    → 'new' NewRest
-           | '!' Exp
+ExpAnd     → ExpRel ExpAndRest
+ExpAndRest → '&&' ExpRel ExpAndRest | λ
+
+ExpRel     → ExpAdd ExpRelRest
+ExpRelRest → '<' ExpAdd ExpRelRest
+           | '>' ExpAdd ExpRelRest
+           | λ
+
+ExpAdd     → ExpMul ExpAddRest
+ExpAddRest → '+' ExpMul ExpAddRest
+           | '-' ExpMul ExpAddRest
+           | λ
+
+ExpMul     → ExpUnary ExpMulRest
+ExpMulRest → '*' ExpUnary ExpMulRest | λ
+
+ExpUnary   → '!' ExpUnary | ExpPostfix
+
+ExpPostfix → ExpPrimary ExpPostfixRest
+ExpPostfixRest → '[' Exp ']' ExpPostfixRest
+              | '.' DotRest ExpPostfixRest
+              | λ
+
+ExpPrimary → 'new' NewRest
            | '(' Exp ')'
-           | 'true'
-           | 'false'
-           | 'this'
-           | Id
-           | Number
+           | 'true' | 'false' | 'this'
+           | Id | Number
 
 NewRest    → Id '(' ')'
            | 'int' '[' Exp ']'
-
-ExpRest    → '&&' Exp ExpRest
-           | '<'  Exp ExpRest
-           | '>'  Exp ExpRest
-           | '+'  Exp ExpRest
-           | '-'  Exp ExpRest
-           | '*'  Exp ExpRest
-           | '[' Exp ']' ExpRest
-           | '.' DotRest ExpRest
-           | λ
 
 DotRest    → 'length'
            | Id '(' ListExpOpt ')'

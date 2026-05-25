@@ -338,24 +338,97 @@ impl<'a> Parser<'a> {
         Err(self.error("expected '=' or '[' after identifier".to_string()))
     }
 
-    // Exp → ExpBase ExpRest
+    // ----------------------------------------------------------------
+    // Expressões estratificadas por precedência (do menor pro maior):
+    //
+    //   Exp        → ExpAnd
+    //   ExpAnd     → ExpRel ( '&&' ExpRel )*
+    //   ExpRel     → ExpAdd ( ('<' | '>') ExpAdd )*
+    //   ExpAdd     → ExpMul ( ('+' | '-') ExpMul )*
+    //   ExpMul     → ExpUnary ( '*' ExpUnary )*
+    //   ExpUnary   → '!' ExpUnary | ExpPostfix
+    //   ExpPostfix → ExpPrimary ( '[' Exp ']' | '.' DotRest )*
+    //   ExpPrimary → 'new' NewRest | '(' Exp ')'
+    //              | 'true' | 'false' | 'this' | Id | Number
+    //
+    // Cada nível associa à esquerda (loop iterativo, não recursivo à
+    // direita) e delega ao nível imediatamente superior em precedência.
+    // ----------------------------------------------------------------
+
     fn parse_exp(&mut self) -> Result<(), ParseError> {
-        self.parse_exp_base()?;
-        self.parse_exp_rest()
+        self.parse_exp_and()
     }
 
-    // ExpBase → 'new' NewRest | '!' Exp | '(' Exp ')'
-    //         | 'true' | 'false' | 'this' | Id | Number
-    fn parse_exp_base(&mut self) -> Result<(), ParseError> {
+    fn parse_exp_and(&mut self) -> Result<(), ParseError> {
+        self.parse_exp_rel()?;
+        while Self::is_op_str(self.peek(), "&&") {
+            self.advance();
+            self.parse_exp_rel()?;
+        }
+        Ok(())
+    }
+
+    fn parse_exp_rel(&mut self) -> Result<(), ParseError> {
+        self.parse_exp_add()?;
+        while Self::is_op_str(self.peek(), "<") || Self::is_op_str(self.peek(), ">") {
+            self.advance();
+            self.parse_exp_add()?;
+        }
+        Ok(())
+    }
+
+    fn parse_exp_add(&mut self) -> Result<(), ParseError> {
+        self.parse_exp_mul()?;
+        while Self::is_op_str(self.peek(), "+") || Self::is_op_str(self.peek(), "-") {
+            self.advance();
+            self.parse_exp_mul()?;
+        }
+        Ok(())
+    }
+
+    fn parse_exp_mul(&mut self) -> Result<(), ParseError> {
+        self.parse_exp_unary()?;
+        while Self::is_op_str(self.peek(), "*") {
+            self.advance();
+            self.parse_exp_unary()?;
+        }
+        Ok(())
+    }
+
+    fn parse_exp_unary(&mut self) -> Result<(), ParseError> {
+        if Self::is_op_str(self.peek(), "!") {
+            self.advance();
+            return self.parse_exp_unary();
+        }
+        self.parse_exp_postfix()
+    }
+
+    fn parse_exp_postfix(&mut self) -> Result<(), ParseError> {
+        self.parse_exp_primary()?;
+        loop {
+            let t = self.peek();
+            if Self::is_delim_str(t, "[") {
+                self.advance();
+                self.parse_exp()?;
+                self.expect_delim("]")?;
+                continue;
+            }
+            if Self::is_delim_str(t, ".") {
+                self.advance();
+                self.parse_dot_rest()?;
+                continue;
+            }
+            break;
+        }
+        Ok(())
+    }
+
+    fn parse_exp_primary(&mut self) -> Result<(), ParseError> {
         let t = self.peek();
 
         if Self::is_keyword(t, "new") {
             self.advance();
             return self.parse_new_rest();
-        }
-        if Self::is_op_str(t, "!") {
-            self.advance();
-            return self.parse_exp();
         }
         if Self::is_delim_str(t, "(") {
             self.advance();
@@ -394,41 +467,6 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         Err(self.error("expected identifier or 'int' after 'new'".to_string()))
-    }
-
-    // ExpRest → '&&' Exp ExpRest | '>' Exp ExpRest | '+' Exp ExpRest
-    //         | '-' Exp ExpRest | '*' Exp ExpRest
-    //         | '[' Exp ']' ExpRest
-    //         | '.' DotRest ExpRest
-    //         | λ
-    fn parse_exp_rest(&mut self) -> Result<(), ParseError> {
-        loop {
-            let t = self.peek();
-            if Self::is_op_str(t, "&&")
-                || Self::is_op_str(t, "<")
-                || Self::is_op_str(t, ">")
-                || Self::is_op_str(t, "+")
-                || Self::is_op_str(t, "-")
-                || Self::is_op_str(t, "*")
-            {
-                self.advance();
-                self.parse_exp()?;
-                continue;
-            }
-            if Self::is_delim_str(t, "[") {
-                self.advance();
-                self.parse_exp()?;
-                self.expect_delim("]")?;
-                continue;
-            }
-            if Self::is_delim_str(t, ".") {
-                self.advance();
-                self.parse_dot_rest()?;
-                continue;
-            }
-            break;
-        }
-        Ok(())
     }
 
     // DotRest → 'length' | Id '(' ListExpOpt ')'
