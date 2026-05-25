@@ -70,8 +70,8 @@ impl From<ParseError> for CompileError {
 }
 
 fn compile(source: &str) -> Result<SymbolTable, CompileError> {
-    let preprocessed = preprocessor::preprocess(source)?;
-    let (tokens, symbol_table) = lexical_analyzer::get_tokens(&preprocessed);
+    let (preprocessed, map) = preprocessor::preprocess(source)?;
+    let (tokens, symbol_table) = lexical_analyzer::get_tokens_with_map(&preprocessed, Some(&map));
     syntatic_analyzer::parse(&tokens)?;
     Ok(symbol_table)
 }
