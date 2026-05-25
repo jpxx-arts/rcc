@@ -1,17 +1,17 @@
 # rcc
 
-Compilador (frontend) para uma variante simplificada de Java (MiniJava),
-escrito em Rust. Implementa pré-processador, analisador léxico e analisador
-sintático.
+Compiler frontend for a simplified variant of Java (MiniJava), written in
+Rust. Implements a preprocessor, a lexical analyzer, and a syntactic
+analyzer.
 
-Trabalho 1 da disciplina DIM0164 — Compiladores (UFRN, 2026.1).
+Coursework for DIM0164 - Compilers (UFRN, 2026.1).
 
-## Pré-requisitos
+## Prerequisites
 
-- Rust 1.93
-- `cargo` no PATH.
+- Rust 1.93 or newer (uses `std::sync::LazyLock`).
+- `cargo` in `PATH`.
 
-Verificação:
+Check with:
 
 ```
 $ rustc --version
@@ -24,53 +24,53 @@ $ cargo --version
 cargo build
 ```
 
-Release com otimizações:
+Optimized release build:
 
 ```
 cargo build --release
 ```
 
-O binário fica em `target/debug/rcc` ou `target/release/rcc`.
+The binary is at `target/debug/rcc` or `target/release/rcc`.
 
-## Executar
+## Run
 
-O programa lê um arquivo `.ling` (sintaxe MiniJava) e processa a pipeline
-completa.
+The program reads a `.ling` file (MiniJava syntax) and runs the full
+pipeline.
 
 ```
-cargo run -- caminho/para/arquivo.ling
+cargo run -- path/to/file.ling
 ```
 
-Exemplos fornecidos:
+Provided examples:
 
 ```
 cargo run -- specs/prog-factorial.ling
 cargo run -- specs/prog-bubblesort.ling
 ```
 
-A saída padrão contém, em ordem:
+Standard output, in order:
 
-1. `código está sintaticamente correto`
-2. Tabela de símbolos (índice, lexema, kind, type, line, col)
+1. `code is syntactically correct`
+2. The symbol table (index, lexeme, kind, type, line, col).
 
-Em caso de erro, a saída de erro padrão contém:
+Standard error, on failure:
 
-- `erro no pré-processamento (linha N): comentário de bloco não fechado`
-- `erro sintático (linha N, coluna C): expected X, got Y`
+- `preprocessing error (line N): unclosed block comment`
+- `syntactic error (line N, column C): expected X, got Y`
 - `Lexical error at line N, column C: Unknown lexeme: 'X'. Did you mean: 'Y'?`
 
-O processo termina com código 0 em sucesso, 1 em erro sintático/léxico,
-2 em erro de uso ou leitura de arquivo.
+Exit codes: `0` on success, `1` on lexical/syntactic error, `2` on usage
+or file I/O error.
 
-## Testes
+## Tests
 
-Suíte completa (137 testes de integração):
+Full suite (integration tests):
 
 ```
 cargo test
 ```
 
-Suíte de uma fase específica:
+A single phase:
 
 ```
 cargo test --test preprocessor
@@ -78,15 +78,7 @@ cargo test --test lexical_analyzer
 cargo test --test syntatic_analyzer
 ```
 
-Cobertura por arquivo:
-
-| Suíte | Testes |
-|-------|-------:|
-| `tests/preprocessor.rs` | 37 |
-| `tests/lexical_analyzer.rs` | 52 |
-| `tests/syntatic_analyzer.rs` | 48 |
-
-## Estrutura do projeto
+## Project structure
 
 ```
 .
@@ -96,66 +88,66 @@ Cobertura por arquivo:
 │   ├── main.rs                  # CLI driver
 │   ├── preprocessor/mod.rs
 │   ├── lexical_analyzer/mod.rs
-│   └── syntatic_analyzer/
-│       ├── mod.rs               # Parser recursivo descendente
+│   └── syntatic_analyzer/mod.rs # Recursive-descent parser
 ├── tests/
 │   ├── preprocessor.rs
 │   ├── lexical_analyzer.rs
 │   └── syntatic_analyzer.rs
 ├── specs/
-│   ├── gramatica.md             # Gramática original da disciplina
-│   ├── gramatica-transformada.md  # Sem recursão à esquerda, fatorada
-│   ├── prog-bubblesort.ling     # Programa de teste
-│   ├── prog-factorial.ling      # Programa de teste
-│   ├── prog-bubblesort.expected # Saída esperada do pré-processador
-│   └── prog-factorial.expected  # Saída esperada do pré-processador
+│   ├── gramatica.md                # Original course grammar
+│   ├── gramatica-transformada.md   # Left-recursion removed, factored
+│   ├── prog-bubblesort.ling        # Test program
+│   ├── prog-factorial.ling         # Test program
+│   ├── prog-bubblesort.expected    # Expected preprocessor output
+│   └── prog-factorial.expected     # Expected preprocessor output
 └── docs/
-    ├── relatorio-tecnico.tex    # Relatório técnico (compila com pdflatex)
-    ├── teoria-fase-1.md         # Notas de estudo: léxico
-    ├── teoria-fase-2.md         # Notas de estudo: sintático
-    └── tasks.md                 # Pendências e melhorias futuras
+    ├── relatorio-tecnico.tex    # Technical report (compile with pdflatex)
+    ├── teoria-fase-1.md         # Study notes: lexical
+    ├── teoria-fase-2.md         # Study notes: syntactic
+    └── tasks.md                 # Pending work and future improvements
 ```
 
-## Pipeline de compilação
+## Compilation pipeline
 
 ```
-arquivo.ling
+file.ling
    │
    ▼
 preprocessor::preprocess
-   │  (remove comentários, normaliza whitespace, preserva newlines)
+   │  (strip comments, normalize whitespace, preserve newlines)
    ▼
 lexical_analyzer::get_tokens
-   │  (longest-match, EOF, suggestions, symbol table com interning)
+   │  (longest-match, EOF, suggestions, symbol table with interning)
    ▼
 syntatic_analyzer::parse
-   │  (descendente recursivo)
+   │  (recursive descent)
    ▼
-(Program, SymbolTable)
+(SymbolTable, syntactic correctness)
 ```
 
-## Recompilar o relatório técnico
+## Rebuilding the technical report
 
 ```
 cd docs
 pdflatex relatorio-tecnico.tex
-pdflatex relatorio-tecnico.tex   # segunda passagem para referências
+pdflatex relatorio-tecnico.tex   # second pass for cross-references
 ```
 
-Requer TeX Live com os pacotes `amsmath`, `listings`, `xcolor`, `hyperref`
-e `geometry` (todos padrão).
+Requires TeX Live with the standard packages `amsmath`, `listings`,
+`xcolor`, `hyperref`, and `geometry`.
 
-## Limitações conhecidas
+## Known deviations from the original grammar
 
-- A gramática original (`specs/gramatica.md`) restringe `_` à última
-  posição de um identificador via `Word -> '_'` terminal. O lexer
-  relaxa para o padrão C/Java (`_` em qualquer posição) para aceitar
-  os arquivos de teste fornecidos (`num_aux`, `aux01`, etc.).
-- O operador `<` foi adicionado à linguagem (não consta na gramática
-  original mas é usado pelos arquivos de teste).
-- A gramática original admite apenas um único `Cmd` por corpo;
-  introduzido `Cmds` para sequências, necessário para os testes.
-- `DotRest` restringe a chamada de método a identificador (em vez de
-  qualquer expressão arbitrária como a gramática original permitiria).
+- `specs/gramatica.md` restricts `_` to the trailing position of an
+  identifier via the terminal production `Word -> '_'`. The lexer
+  relaxes this to the C/Java convention (`_` anywhere) to accept the
+  provided test programs (`num_aux`, `aux01`, etc.).
+- The `<` operator was added (not in the original grammar, but used by
+  the test programs).
+- The original grammar admits only a single `Cmd` per body; a `Cmds`
+  non-terminal was introduced for sequences, required by the test
+  programs.
+- `DotRest` restricts the method-call form to `Id ( args )` instead of
+  any `Exp ( args )` (semantically sane, mirrors C/Java).
 
-Detalhes em `specs/gramatica-transformada.md`.
+Details in `specs/gramatica-transformada.md`.
