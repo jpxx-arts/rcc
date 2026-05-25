@@ -29,9 +29,11 @@ fn main() -> ExitCode {
     };
 
     match compile(&source) {
-        Ok(symbol_table) => {
+        Ok((program, symbol_table)) => {
             println!("código está sintaticamente correto");
             print_symbol_table(&symbol_table);
+            println!("\nárvore sintática abstrata:");
+            println!("{program:#?}");
             ExitCode::SUCCESS
         }
         Err(CompileError::Preprocess(err)) => {
@@ -69,11 +71,11 @@ impl From<ParseError> for CompileError {
     }
 }
 
-fn compile(source: &str) -> Result<SymbolTable, CompileError> {
+fn compile(source: &str) -> Result<(syntatic_analyzer::Program, SymbolTable), CompileError> {
     let preprocessed = preprocessor::preprocess(source)?;
     let (tokens, symbol_table) = lexical_analyzer::get_tokens(&preprocessed);
-    syntatic_analyzer::parse(&tokens)?;
-    Ok(symbol_table)
+    let program = syntatic_analyzer::parse(&tokens, &symbol_table)?;
+    Ok((program, symbol_table))
 }
 
 fn print_symbol_table(table: &SymbolTable) {

@@ -5,12 +5,12 @@
 
 use rcc::lexical_analyzer;
 use rcc::preprocessor;
-use rcc::syntatic_analyzer::{self, ParseError};
+use rcc::syntatic_analyzer::{self, BinOp, Expr, ParseError, Program, Stmt};
 
-fn parse_source(src: &str) -> Result<(), ParseError> {
+fn parse_source(src: &str) -> Result<Program, ParseError> {
     let preprocessed = preprocessor::preprocess(src).expect("preprocess should succeed");
-    let (tokens, _symbol_table) = lexical_analyzer::get_tokens(&preprocessed);
-    syntatic_analyzer::parse(&tokens)
+    let (tokens, symbol_table) = lexical_analyzer::get_tokens(&preprocessed);
+    syntatic_analyzer::parse(&tokens, &symbol_table)
 }
 
 mod minimal_programs {
@@ -54,7 +54,7 @@ mod minimal_programs {
 mod statements {
     use super::*;
 
-    fn parse_in_main(body: &str) -> Result<(), ParseError> {
+    fn parse_in_main(body: &str) -> Result<Program, ParseError> {
         let src = format!("class Main {{ public static void main(String[] a) {{ {body} }} }}");
         parse_source(&src)
     }
@@ -103,7 +103,7 @@ mod statements {
 mod expressions {
     use super::*;
 
-    fn parse_with_exp(exp: &str) -> Result<(), ParseError> {
+    fn parse_with_exp(exp: &str) -> Result<Program, ParseError> {
         let src = format!(
             "class Main {{ public static void main(String[] a) {{ x = {exp}; }} }}"
         );
@@ -260,5 +260,174 @@ mod e2e_fixtures {
         let src =
             std::fs::read_to_string("specs/prog-factorial.ling").expect("fixture should exist");
         parse_source(&src).expect("factorial should parse");
+    }
+}
+
+mod precedence {
+    use super::*;
+
+    /// Extracts the first stmt body of `main`, asserts it's `Assign(_, expr)`,
+    /// returns `expr`.
+    fn first_assign_rhs(src: &str) -> Expr {
+        let prog = parse_source(src).expect("should parse");
+        match &prog.main.body[0] {
+            Stmt::Assign(_, expr) => expr.clone(),
+            other => panic!("expected Assign, got {:?}", other),
+        }
+    }
+
+    fn wrap_main(body: &str) -> String {
+        format!("class M {{ public static void main(String[] a) {{ x = {body}; }} }}")
+    }
+
+    /// `a + b * c` → `Add(a, Mul(b, c))`
+    #[test]
+    fn mul_binds_tighter_than_add() {
+        let expr = first_assign_rhs(&wrap_main("a + b * c"));
+        match expr {
+            Expr::Binary(BinOp::Add, lhs, rhs) => {
+                assert_eq!(*lhs, Expr::Id("a".into()));
+                match *rhs {
+                    Expr::Binary(BinOp::Mul, l, r) => {
+                        assert_eq!(*l, Expr::Id("b".into()));
+                        assert_eq!(*r, Expr::Id("c".into()));
+                    }
+                    other => panic!("expected Mul on rhs, got {:?}", other),
+                }
+            }
+            other => panic!("expected Add at root, got {:?}", other),
+        }
+    }
+
+    /// `a * b + c` → `Add(Mul(a, b), c)`
+    #[test]
+    fn mul_binds_tighter_than_add_reversed() {
+        let expr = first_assign_rhs(&wrap_main("a * b + c"));
+        match expr {
+            Expr::Binary(BinOp::Add, lhs, rhs) => {
+                assert_eq!(*rhs, Expr::Id("c".into()));
+                match *lhs {
+                    Expr::Binary(BinOp::Mul, l, r) => {
+                        assert_eq!(*l, Expr::Id("a".into()));
+                        assert_eq!(*r, Expr::Id("b".into()));
+                    }
+                    other => panic!("expected Mul on lhs, got {:?}", other),
+                }
+            }
+            other => panic!("expected Add at root, got {:?}", other),
+        }
+    }
+
+    /// `a + b - c` → `Sub(Add(a, b), c)` (left-associative)
+    #[test]
+    fn add_and_sub_are_left_associative() {
+        let expr = first_assign_rhs(&wrap_main("a + b - c"));
+        match expr {
+            Expr::Binary(BinOp::Sub, lhs, rhs) => {
+                assert_eq!(*rhs, Expr::Id("c".into()));
+                match *lhs {
+                    Expr::Binary(BinOp::Add, _, _) => {} // ok
+                    other => panic!("expected Add on lhs, got {:?}", other),
+                }
+            }
+            other => panic!("expected Sub at root, got {:?}", other),
+        }
+    }
+
+    /// `a < b && c > d` → `And(Lt(a, b), Gt(c, d))`
+    #[test]
+    fn and_binds_looser_than_relational() {
+        let expr = first_assign_rhs(&wrap_main("a < b && c > d"));
+        match expr {
+            Expr::Binary(BinOp::And, lhs, rhs) => {
+                assert!(matches!(*lhs, Expr::Binary(BinOp::Lt, _, _)));
+                assert!(matches!(*rhs, Expr::Binary(BinOp::Gt, _, _)));
+            }
+            other => panic!("expected And at root, got {:?}", other),
+        }
+    }
+
+    /// `!a && b` → `And(Not(a), b)`
+    #[test]
+    fn unary_not_binds_tighter_than_and() {
+        let expr = first_assign_rhs(&wrap_main("!a && b"));
+        match expr {
+            Expr::Binary(BinOp::And, lhs, rhs) => {
+                assert!(matches!(*lhs, Expr::Not(_)));
+                assert_eq!(*rhs, Expr::Id("b".into()));
+            }
+            other => panic!("expected And at root, got {:?}", other),
+        }
+    }
+
+    /// Parens override precedence: `(a + b) * c` → `Mul(Add(a, b), c)`
+    #[test]
+    fn parens_override_precedence() {
+        let expr = first_assign_rhs(&wrap_main("(a + b) * c"));
+        match expr {
+            Expr::Binary(BinOp::Mul, lhs, rhs) => {
+                assert!(matches!(*lhs, Expr::Binary(BinOp::Add, _, _)));
+                assert_eq!(*rhs, Expr::Id("c".into()));
+            }
+            other => panic!("expected Mul at root, got {:?}", other),
+        }
+    }
+}
+
+mod ast_shape {
+    use super::*;
+    use rcc::syntatic_analyzer::{ClassDecl, Type};
+
+    #[test]
+    fn main_class_is_captured() {
+        let src = "class M { public static void main(String[] argv) { x = 1; } }";
+        let prog = parse_source(src).unwrap();
+        assert_eq!(prog.main.name, "M");
+        assert_eq!(prog.main.args_name, "argv");
+        assert_eq!(prog.main.body.len(), 1);
+    }
+
+    #[test]
+    fn class_decl_extends_is_captured() {
+        let src = "class M { public static void main(String[] a) { } }
+                   class Child extends Parent { }";
+        let prog = parse_source(src).unwrap();
+        let child: &ClassDecl = &prog.classes[0];
+        assert_eq!(child.name, "Child");
+        assert_eq!(child.extends.as_deref(), Some("Parent"));
+    }
+
+    #[test]
+    fn types_are_captured() {
+        let src = "class M { public static void main(String[] a) { } }
+                   class F {
+                       int x;
+                       boolean b;
+                       int[] arr;
+                       Foo obj;
+                       public int get() { return 0; }
+                   }";
+        let prog = parse_source(src).unwrap();
+        let f = &prog.classes[0];
+        assert_eq!(f.vars[0].ty, Type::Int);
+        assert_eq!(f.vars[1].ty, Type::Boolean);
+        assert_eq!(f.vars[2].ty, Type::IntArray);
+        assert_eq!(f.vars[3].ty, Type::Class("Foo".to_string()));
+    }
+
+    #[test]
+    fn method_call_captures_name_and_args() {
+        let src =
+            "class M { public static void main(String[] a) { x = this.foo(1, 2, 3); } }";
+        let prog = parse_source(src).unwrap();
+        match &prog.main.body[0] {
+            Stmt::Assign(_, Expr::Call(target, name, args)) => {
+                assert_eq!(**target, Expr::This);
+                assert_eq!(name, "foo");
+                assert_eq!(args.len(), 3);
+                assert_eq!(args[0], Expr::Number("1".into()));
+            }
+            other => panic!("expected Assign with Call, got {:?}", other),
+        }
     }
 }

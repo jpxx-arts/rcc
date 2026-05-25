@@ -1,13 +1,15 @@
-//! Recursive-descent parser for the transformed grammar in
+//! Parser descendente recursivo para a gramática transformada em
 //! `specs/gramatica-transformada.md`.
 //!
-//! The parser consumes the token stream produced by `lexical_analyzer` and
-//! reports `Ok(())` if the program is syntactically valid, or
-//! `Err(ParseError)` with line/column when it isn't. No AST is produced —
-//! the assignment requires only a yes/no answer plus the symbol table that
-//! the lexer already populated.
+//! Constrói uma AST (`ast::Program`) que pode ser consumida por fases
+//! subsequentes (análise semântica, geração de código). Erros sintáticos
+//! são reportados com linha, coluna e descrição do que se esperava vs.
+//! o que se encontrou.
 
-use crate::lexical_analyzer::{Token, TokenAttribute, TokenClass};
+pub mod ast;
+pub use ast::*;
+
+use crate::lexical_analyzer::{SymbolTable, Token, TokenAttribute, TokenClass};
 
 #[derive(Debug, PartialEq)]
 pub struct ParseError {
@@ -18,22 +20,30 @@ pub struct ParseError {
 
 pub struct Parser<'a> {
     tokens: &'a [Token],
+    symbol_table: &'a SymbolTable,
     cursor: usize,
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(tokens: &'a [Token]) -> Self {
-        Parser { tokens, cursor: 0 }
+    pub fn new(tokens: &'a [Token], symbol_table: &'a SymbolTable) -> Self {
+        Parser {
+            tokens,
+            symbol_table,
+            cursor: 0,
+        }
     }
 
-    pub fn parse(&mut self) -> Result<(), ParseError> {
-        self.parse_prog()
+    pub fn parse(&mut self) -> Result<Program, ParseError> {
+        let prog = self.parse_prog()?;
+        if self.peek().token_name != TokenClass::EOF {
+            return Err(self.error("expected end of input".to_string()));
+        }
+        Ok(prog)
     }
 
     // ---------- helpers ----------
 
     fn peek(&self) -> &Token {
-        // The token list always ends with EOF, so cursor is always in range.
         &self.tokens[self.cursor.min(self.tokens.len() - 1)]
     }
 
@@ -72,6 +82,19 @@ impl<'a> Parser<'a> {
         token.token_name == TokenClass::NUMBER
     }
 
+    /// Lexeme of the current token (looked up in the symbol table when
+    /// attribute is a Pointer).
+    fn lexeme_of(&self, token: &Token) -> String {
+        match &token.attribute_value {
+            TokenAttribute::Pointer(idx) => self.symbol_table.registers[*idx].lexeme.clone(),
+            TokenAttribute::Itself(s) => s.clone(),
+            TokenAttribute::Null => match &token.token_name {
+                TokenClass::KEYWORD(s) => s.clone(),
+                _ => String::new(),
+            },
+        }
+    }
+
     fn expect_keyword(&mut self, kw: &str) -> Result<(), ParseError> {
         if Self::is_keyword(self.peek(), kw) {
             self.advance();
@@ -90,10 +113,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_id(&mut self) -> Result<(), ParseError> {
+    fn expect_id(&mut self) -> Result<String, ParseError> {
         if Self::is_id(self.peek()) {
+            let name = self.lexeme_of(self.peek());
             self.advance();
-            Ok(())
+            Ok(name)
         } else {
             Err(self.error("expected identifier".to_string()))
         }
@@ -112,20 +136,17 @@ impl<'a> Parser<'a> {
     // ---------- productions ----------
 
     // Prog → MainC DefCl
-    fn parse_prog(&mut self) -> Result<(), ParseError> {
-        self.parse_main_c()?;
-        self.parse_def_cl()?;
-        if self.peek().token_name != TokenClass::EOF {
-            return Err(self.error("expected end of input".to_string()));
-        }
-        Ok(())
+    fn parse_prog(&mut self) -> Result<Program, ParseError> {
+        let main = self.parse_main_c()?;
+        let classes = self.parse_def_cl()?;
+        Ok(Program { main, classes })
     }
 
     // MainC → 'class' Id '{' 'public' 'static' 'void' 'main'
     //         '(' 'String' '[' ']' Id ')' '{' Cmds '}' '}'
-    fn parse_main_c(&mut self) -> Result<(), ParseError> {
+    fn parse_main_c(&mut self) -> Result<MainClass, ParseError> {
         self.expect_keyword("class")?;
-        self.expect_id()?;
+        let name = self.expect_id()?;
         self.expect_delim("{")?;
         self.expect_keyword("public")?;
         self.expect_keyword("static")?;
@@ -135,46 +156,57 @@ impl<'a> Parser<'a> {
         self.expect_keyword("String")?;
         self.expect_delim("[")?;
         self.expect_delim("]")?;
-        self.expect_id()?;
+        let args_name = self.expect_id()?;
         self.expect_delim(")")?;
         self.expect_delim("{")?;
-        self.parse_cmds()?;
+        let body = self.parse_cmds()?;
         self.expect_delim("}")?;
         self.expect_delim("}")?;
-        Ok(())
+        Ok(MainClass {
+            name,
+            args_name,
+            body,
+        })
     }
 
     // DefCl → 'class' Id DefClHead '{' DefVar DefMet '}' DefCl | λ
-    // DefClHead → 'extends' Id | λ
-    fn parse_def_cl(&mut self) -> Result<(), ParseError> {
+    fn parse_def_cl(&mut self) -> Result<Vec<ClassDecl>, ParseError> {
+        let mut classes = Vec::new();
         while Self::is_keyword(self.peek(), "class") {
             self.advance();
-            self.expect_id()?;
-            if Self::is_keyword(self.peek(), "extends") {
+            let name = self.expect_id()?;
+            let extends = if Self::is_keyword(self.peek(), "extends") {
                 self.advance();
-                self.expect_id()?;
-            }
+                Some(self.expect_id()?)
+            } else {
+                None
+            };
             self.expect_delim("{")?;
-            self.parse_def_var()?;
-            self.parse_def_met()?;
+            let vars = self.parse_def_var()?;
+            let methods = self.parse_def_met()?;
             self.expect_delim("}")?;
+            classes.push(ClassDecl {
+                name,
+                extends,
+                vars,
+                methods,
+            });
         }
-        Ok(())
+        Ok(classes)
     }
 
     // DefVar → Type Id ';' DefVar | λ
-    fn parse_def_var(&mut self) -> Result<(), ParseError> {
+    fn parse_def_var(&mut self) -> Result<Vec<VarDecl>, ParseError> {
+        let mut vars = Vec::new();
         while self.at_def_var() {
-            self.parse_type()?;
-            self.expect_id()?;
+            let ty = self.parse_type()?;
+            let name = self.expect_id()?;
             self.expect_delim(";")?;
+            vars.push(VarDecl { ty, name });
         }
-        Ok(())
+        Ok(vars)
     }
 
-    /// Returns true when the next tokens unambiguously start a `Type Id ;`
-    /// declaration (DefVar) rather than a Cmd. Disambiguation uses lookahead-2
-    /// because a custom-type declaration `MyClass x;` has `Id Id` shape.
     fn at_def_var(&self) -> bool {
         let t = self.peek();
         if Self::is_keyword(t, "int") || Self::is_keyword(t, "boolean") {
@@ -189,70 +221,86 @@ impl<'a> Parser<'a> {
     // DefMet → 'public' Type Id '(' ArgsOpt ')'
     //          '{' DefVar Cmds 'return' Exp ';' '}' DefMet
     //        | λ
-    fn parse_def_met(&mut self) -> Result<(), ParseError> {
+    fn parse_def_met(&mut self) -> Result<Vec<MethodDecl>, ParseError> {
+        let mut methods = Vec::new();
         while Self::is_keyword(self.peek(), "public") {
             self.advance();
-            self.parse_type()?;
-            self.expect_id()?;
+            let return_type = self.parse_type()?;
+            let name = self.expect_id()?;
             self.expect_delim("(")?;
-            if !Self::is_delim_str(self.peek(), ")") {
-                self.parse_args()?;
-            }
+            let params = if Self::is_delim_str(self.peek(), ")") {
+                Vec::new()
+            } else {
+                self.parse_args()?
+            };
             self.expect_delim(")")?;
             self.expect_delim("{")?;
-            self.parse_def_var()?;
-            self.parse_cmds()?;
+            let vars = self.parse_def_var()?;
+            let body = self.parse_cmds()?;
             self.expect_keyword("return")?;
-            self.parse_exp()?;
+            let return_expr = self.parse_exp()?;
             self.expect_delim(";")?;
             self.expect_delim("}")?;
+            methods.push(MethodDecl {
+                return_type,
+                name,
+                params,
+                vars,
+                body,
+                return_expr,
+            });
         }
-        Ok(())
+        Ok(methods)
     }
 
     // Args → Type Id ArgsRest
     // ArgsRest → ',' Args | λ
-    fn parse_args(&mut self) -> Result<(), ParseError> {
+    fn parse_args(&mut self) -> Result<Vec<VarDecl>, ParseError> {
+        let mut args = Vec::new();
         loop {
-            self.parse_type()?;
-            self.expect_id()?;
+            let ty = self.parse_type()?;
+            let name = self.expect_id()?;
+            args.push(VarDecl { ty, name });
             if Self::is_delim_str(self.peek(), ",") {
                 self.advance();
                 continue;
             }
             break;
         }
-        Ok(())
+        Ok(args)
     }
 
     // Type → 'int' TypeIntRest | 'boolean' | Id
     // TypeIntRest → '[' ']' | λ
-    fn parse_type(&mut self) -> Result<(), ParseError> {
+    fn parse_type(&mut self) -> Result<Type, ParseError> {
         let t = self.peek();
         if Self::is_keyword(t, "int") {
             self.advance();
             if Self::is_delim_str(self.peek(), "[") {
                 self.advance();
                 self.expect_delim("]")?;
+                return Ok(Type::IntArray);
             }
-            Ok(())
+            Ok(Type::Int)
         } else if Self::is_keyword(t, "boolean") {
             self.advance();
-            Ok(())
+            Ok(Type::Boolean)
         } else if Self::is_id(t) {
+            let name = self.lexeme_of(t);
             self.advance();
-            Ok(())
+            Ok(Type::Class(name))
         } else {
             Err(self.error("expected type ('int', 'boolean', or identifier)".to_string()))
         }
     }
 
     // Cmds → Cmd Cmds | λ
-    fn parse_cmds(&mut self) -> Result<(), ParseError> {
+    fn parse_cmds(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        let mut stmts = Vec::new();
         while self.at_cmd() {
-            self.parse_cmd()?;
+            stmts.push(self.parse_cmd()?);
         }
-        Ok(())
+        Ok(stmts)
     }
 
     fn at_cmd(&self) -> bool {
@@ -266,37 +314,36 @@ impl<'a> Parser<'a> {
                     || Self::is_delim_str(self.peek_at(1), "[")))
     }
 
-    // Cmd → '{' Cmds '}'
-    //     | 'if' '(' Exp ')' Cmd 'else' Cmd
-    //     | 'while' '(' Exp ')' Cmd
-    //     | 'System' '.' 'out' '.' 'println' '(' Exp ')' ';'
-    //     | Id CmdIdRest
-    fn parse_cmd(&mut self) -> Result<(), ParseError> {
+    fn parse_cmd(&mut self) -> Result<Stmt, ParseError> {
         let t = self.peek();
 
         if Self::is_delim_str(t, "{") {
             self.advance();
-            self.parse_cmds()?;
+            let stmts = self.parse_cmds()?;
             self.expect_delim("}")?;
-            return Ok(());
+            return Ok(Stmt::Block(stmts));
         }
         if Self::is_keyword(t, "if") {
             self.advance();
             self.expect_delim("(")?;
-            self.parse_exp()?;
+            let cond = self.parse_exp()?;
             self.expect_delim(")")?;
-            self.parse_cmd()?;
+            let then_branch = self.parse_cmd()?;
             self.expect_keyword("else")?;
-            self.parse_cmd()?;
-            return Ok(());
+            let else_branch = self.parse_cmd()?;
+            return Ok(Stmt::If(
+                cond,
+                Box::new(then_branch),
+                Box::new(else_branch),
+            ));
         }
         if Self::is_keyword(t, "while") {
             self.advance();
             self.expect_delim("(")?;
-            self.parse_exp()?;
+            let cond = self.parse_exp()?;
             self.expect_delim(")")?;
-            self.parse_cmd()?;
-            return Ok(());
+            let body = self.parse_cmd()?;
+            return Ok(Stmt::While(cond, Box::new(body)));
         }
         if Self::is_keyword(t, "System") {
             self.advance();
@@ -305,125 +352,134 @@ impl<'a> Parser<'a> {
             self.expect_delim(".")?;
             self.expect_keyword("println")?;
             self.expect_delim("(")?;
-            self.parse_exp()?;
+            let expr = self.parse_exp()?;
             self.expect_delim(")")?;
             self.expect_delim(";")?;
-            return Ok(());
+            return Ok(Stmt::Println(expr));
         }
         if Self::is_id(t) {
-            self.advance(); // consume the Id
-            return self.parse_cmd_id_rest();
+            let name = self.lexeme_of(t);
+            self.advance();
+            return self.parse_cmd_id_rest(name);
         }
         Err(self.error("expected statement".to_string()))
     }
 
-    // CmdIdRest → '=' Exp ';' | '[' Exp ']' '=' Exp ';'
-    fn parse_cmd_id_rest(&mut self) -> Result<(), ParseError> {
+    fn parse_cmd_id_rest(&mut self, name: String) -> Result<Stmt, ParseError> {
         let t = self.peek();
         if Self::is_delim_str(t, "=") {
             self.advance();
-            self.parse_exp()?;
+            let expr = self.parse_exp()?;
             self.expect_delim(";")?;
-            return Ok(());
+            return Ok(Stmt::Assign(name, expr));
         }
         if Self::is_delim_str(t, "[") {
             self.advance();
-            self.parse_exp()?;
+            let index = self.parse_exp()?;
             self.expect_delim("]")?;
             self.expect_delim("=")?;
-            self.parse_exp()?;
+            let value = self.parse_exp()?;
             self.expect_delim(";")?;
-            return Ok(());
+            return Ok(Stmt::ArrayAssign(name, index, value));
         }
         Err(self.error("expected '=' or '[' after identifier".to_string()))
     }
 
     // ----------------------------------------------------------------
-    // Expressões estratificadas por precedência (do menor pro maior):
-    //
-    //   Exp        → ExpAnd
-    //   ExpAnd     → ExpRel ( '&&' ExpRel )*
-    //   ExpRel     → ExpAdd ( ('<' | '>') ExpAdd )*
-    //   ExpAdd     → ExpMul ( ('+' | '-') ExpMul )*
-    //   ExpMul     → ExpUnary ( '*' ExpUnary )*
-    //   ExpUnary   → '!' ExpUnary | ExpPostfix
-    //   ExpPostfix → ExpPrimary ( '[' Exp ']' | '.' DotRest )*
-    //   ExpPrimary → 'new' NewRest | '(' Exp ')'
-    //              | 'true' | 'false' | 'this' | Id | Number
-    //
-    // Cada nível associa à esquerda (loop iterativo, não recursivo à
-    // direita) e delega ao nível imediatamente superior em precedência.
+    // Expressões estratificadas por precedência. Cada nível associa
+    // à esquerda — usamos um `while` iterativo em vez de recursão à
+    // direita pra que `a+b+c` parseie como `(a+b)+c`.
     // ----------------------------------------------------------------
 
-    fn parse_exp(&mut self) -> Result<(), ParseError> {
+    fn parse_exp(&mut self) -> Result<Expr, ParseError> {
         self.parse_exp_and()
     }
 
-    fn parse_exp_and(&mut self) -> Result<(), ParseError> {
-        self.parse_exp_rel()?;
+    fn parse_exp_and(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_exp_rel()?;
         while Self::is_op_str(self.peek(), "&&") {
             self.advance();
-            self.parse_exp_rel()?;
+            let right = self.parse_exp_rel()?;
+            left = Expr::Binary(BinOp::And, Box::new(left), Box::new(right));
         }
-        Ok(())
+        Ok(left)
     }
 
-    fn parse_exp_rel(&mut self) -> Result<(), ParseError> {
-        self.parse_exp_add()?;
-        while Self::is_op_str(self.peek(), "<") || Self::is_op_str(self.peek(), ">") {
+    fn parse_exp_rel(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_exp_add()?;
+        loop {
+            let op = if Self::is_op_str(self.peek(), "<") {
+                BinOp::Lt
+            } else if Self::is_op_str(self.peek(), ">") {
+                BinOp::Gt
+            } else {
+                break;
+            };
             self.advance();
-            self.parse_exp_add()?;
+            let right = self.parse_exp_add()?;
+            left = Expr::Binary(op, Box::new(left), Box::new(right));
         }
-        Ok(())
+        Ok(left)
     }
 
-    fn parse_exp_add(&mut self) -> Result<(), ParseError> {
-        self.parse_exp_mul()?;
-        while Self::is_op_str(self.peek(), "+") || Self::is_op_str(self.peek(), "-") {
+    fn parse_exp_add(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_exp_mul()?;
+        loop {
+            let op = if Self::is_op_str(self.peek(), "+") {
+                BinOp::Add
+            } else if Self::is_op_str(self.peek(), "-") {
+                BinOp::Sub
+            } else {
+                break;
+            };
             self.advance();
-            self.parse_exp_mul()?;
+            let right = self.parse_exp_mul()?;
+            left = Expr::Binary(op, Box::new(left), Box::new(right));
         }
-        Ok(())
+        Ok(left)
     }
 
-    fn parse_exp_mul(&mut self) -> Result<(), ParseError> {
-        self.parse_exp_unary()?;
+    fn parse_exp_mul(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_exp_unary()?;
         while Self::is_op_str(self.peek(), "*") {
             self.advance();
-            self.parse_exp_unary()?;
+            let right = self.parse_exp_unary()?;
+            left = Expr::Binary(BinOp::Mul, Box::new(left), Box::new(right));
         }
-        Ok(())
+        Ok(left)
     }
 
-    fn parse_exp_unary(&mut self) -> Result<(), ParseError> {
+    fn parse_exp_unary(&mut self) -> Result<Expr, ParseError> {
         if Self::is_op_str(self.peek(), "!") {
             self.advance();
-            return self.parse_exp_unary();
+            let inner = self.parse_exp_unary()?;
+            return Ok(Expr::Not(Box::new(inner)));
         }
         self.parse_exp_postfix()
     }
 
-    fn parse_exp_postfix(&mut self) -> Result<(), ParseError> {
-        self.parse_exp_primary()?;
+    fn parse_exp_postfix(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_exp_primary()?;
         loop {
             let t = self.peek();
             if Self::is_delim_str(t, "[") {
                 self.advance();
-                self.parse_exp()?;
+                let index = self.parse_exp()?;
                 self.expect_delim("]")?;
+                expr = Expr::Index(Box::new(expr), Box::new(index));
                 continue;
             }
             if Self::is_delim_str(t, ".") {
                 self.advance();
-                self.parse_dot_rest()?;
+                expr = self.parse_dot_rest(expr)?;
                 continue;
             }
             break;
         }
-        Ok(())
+        Ok(expr)
     }
 
-    fn parse_exp_primary(&mut self) -> Result<(), ParseError> {
+    fn parse_exp_primary(&mut self) -> Result<Expr, ParseError> {
         let t = self.peek();
 
         if Self::is_keyword(t, "new") {
@@ -432,83 +488,94 @@ impl<'a> Parser<'a> {
         }
         if Self::is_delim_str(t, "(") {
             self.advance();
-            self.parse_exp()?;
+            let inner = self.parse_exp()?;
             self.expect_delim(")")?;
-            return Ok(());
+            return Ok(inner);
         }
-        if Self::is_keyword(t, "true")
-            || Self::is_keyword(t, "false")
-            || Self::is_keyword(t, "this")
-        {
+        if Self::is_keyword(t, "true") {
             self.advance();
-            return Ok(());
+            return Ok(Expr::Bool(true));
         }
-        if Self::is_id(t) || Self::is_number(t) {
+        if Self::is_keyword(t, "false") {
             self.advance();
-            return Ok(());
+            return Ok(Expr::Bool(false));
+        }
+        if Self::is_keyword(t, "this") {
+            self.advance();
+            return Ok(Expr::This);
+        }
+        if Self::is_id(t) {
+            let name = self.lexeme_of(t);
+            self.advance();
+            return Ok(Expr::Id(name));
+        }
+        if Self::is_number(t) {
+            let val = self.lexeme_of(t);
+            self.advance();
+            return Ok(Expr::Number(val));
         }
         Err(self.error("expected expression".to_string()))
     }
 
     // NewRest → Id '(' ')' | 'int' '[' Exp ']'
-    fn parse_new_rest(&mut self) -> Result<(), ParseError> {
+    fn parse_new_rest(&mut self) -> Result<Expr, ParseError> {
         let t = self.peek();
         if Self::is_keyword(t, "int") {
             self.advance();
             self.expect_delim("[")?;
-            self.parse_exp()?;
+            let size = self.parse_exp()?;
             self.expect_delim("]")?;
-            return Ok(());
+            return Ok(Expr::NewIntArray(Box::new(size)));
         }
         if Self::is_id(t) {
+            let name = self.lexeme_of(t);
             self.advance();
             self.expect_delim("(")?;
             self.expect_delim(")")?;
-            return Ok(());
+            return Ok(Expr::NewObject(name));
         }
         Err(self.error("expected identifier or 'int' after 'new'".to_string()))
     }
 
     // DotRest → 'length' | Id '(' ListExpOpt ')'
-    fn parse_dot_rest(&mut self) -> Result<(), ParseError> {
+    fn parse_dot_rest(&mut self, target: Expr) -> Result<Expr, ParseError> {
         let t = self.peek();
         if Self::is_keyword(t, "length") {
             self.advance();
-            return Ok(());
+            return Ok(Expr::Length(Box::new(target)));
         }
         if Self::is_id(t) {
+            let method = self.lexeme_of(t);
             self.advance();
             self.expect_delim("(")?;
-            if !Self::is_delim_str(self.peek(), ")") {
-                self.parse_list_exp()?;
-            }
+            let args = if Self::is_delim_str(self.peek(), ")") {
+                Vec::new()
+            } else {
+                self.parse_list_exp()?
+            };
             self.expect_delim(")")?;
-            return Ok(());
+            return Ok(Expr::Call(Box::new(target), method, args));
         }
         Err(self.error("expected 'length' or method name after '.'".to_string()))
     }
 
-    // ListExpOpt → Exp ListExpRest | λ
-    // ListExpRest → ',' Exp ListExpRest | λ
-    fn parse_list_exp(&mut self) -> Result<(), ParseError> {
+    fn parse_list_exp(&mut self) -> Result<Vec<Expr>, ParseError> {
+        let mut args = Vec::new();
         loop {
-            self.parse_exp()?;
+            args.push(self.parse_exp()?);
             if Self::is_delim_str(self.peek(), ",") {
                 self.advance();
                 continue;
             }
             break;
         }
-        Ok(())
+        Ok(args)
     }
 }
 
 fn describe_token(token: &Token) -> String {
     match &token.token_name {
-        TokenClass::ID => match &token.attribute_value {
-            TokenAttribute::Pointer(_) => "identifier".to_string(),
-            _ => "identifier".to_string(),
-        },
+        TokenClass::ID => "identifier".to_string(),
         TokenClass::NUMBER => "number".to_string(),
         TokenClass::KEYWORD(s) => format!("keyword '{s}'"),
         TokenClass::OPERATION => match &token.attribute_value {
@@ -524,7 +591,7 @@ fn describe_token(token: &Token) -> String {
     }
 }
 
-/// Convenience: parse a token slice and return Ok/Err.
-pub fn parse(tokens: &[Token]) -> Result<(), ParseError> {
-    Parser::new(tokens).parse()
+/// Convenience function: builds a Parser and runs it.
+pub fn parse(tokens: &[Token], symbol_table: &SymbolTable) -> Result<Program, ParseError> {
+    Parser::new(tokens, symbol_table).parse()
 }
