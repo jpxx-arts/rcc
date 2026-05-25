@@ -1,3 +1,4 @@
+use crate::preprocessor::SourceMap;
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -130,6 +131,10 @@ enum TokenClassTag {
 }
 
 pub fn get_tokens(src: &str) -> (Vec<Token>, SymbolTable) {
+    get_tokens_with_map(src, None)
+}
+
+pub fn get_tokens_with_map(src: &str, map: Option<&SourceMap>) -> (Vec<Token>, SymbolTable) {
     let mut tokens = Vec::new();
     let mut symbol_table = SymbolTable::new();
 
@@ -138,7 +143,7 @@ pub fn get_tokens(src: &str) -> (Vec<Token>, SymbolTable) {
 
     let mut cursor = 0;
     while cursor < src.len() {
-        match get_token(&src[cursor..], &mut symbol_table, &mut line, &mut column) {
+        match get_token(src, cursor, map, &mut symbol_table, &mut line, &mut column) {
             Ok((Some(token), consumed)) => {
                 tokens.push(token);
                 cursor += consumed;
@@ -168,54 +173,87 @@ pub fn get_tokens(src: &str) -> (Vec<Token>, SymbolTable) {
     (tokens, symbol_table)
 }
 
-/// Consume one token from `src` starting at byte 0.
+/// Consume one token from `src` starting at `cursor`.
 ///
 /// Returns `(Some(token), consumed)` if a token was produced, or
 /// `(None, consumed)` if only whitespace/newlines were skipped (no token).
 fn get_token(
-    src: &str,
+    full_src: &str,
+    cursor: usize,
+    map: Option<&SourceMap>,
     symbol_table: &mut SymbolTable,
     line: &mut usize,
     column: &mut usize,
 ) -> Result<(Option<Token>, usize), ErrorUnrecognizedLexeme> {
+    let src = &full_src[cursor..];
     let mut lexeme = String::new();
     let mut consumed: usize = 0;
     let mut token_tag = TokenClassTag::Unknown;
+
+    // Initial position
+    if let Some(m) = map {
+        let pos = m.get(cursor);
+        *line = pos.0;
+        *column = pos.1;
+    }
     let mut start_line = *line;
     let mut start_column = *column;
 
     for c in src.chars() {
-        consumed += c.len_utf8();
+        let char_len = c.len_utf8();
 
         match c {
             '\n' => {
                 if lexeme.is_empty() {
-                    *line += 1;
-                    *column = 1;
+                    consumed += char_len;
+                    if let Some(m) = map {
+                        let pos = m.get(cursor + consumed);
+                        *line = pos.0;
+                        *column = pos.1;
+                    } else {
+                        *line += 1;
+                        *column = 1;
+                    }
                     start_line = *line;
                     start_column = *column;
                     continue;
                 }
-                let token = build_token(&lexeme, &token_tag, symbol_table, start_line, start_column)?;
-                *line += 1;
-                *column = 1;
+                let token =
+                    build_token(&lexeme, &token_tag, symbol_table, start_line, start_column)?;
                 return Ok((Some(token), consumed));
             }
             ' ' | '\t' | '\r' => {
                 if lexeme.is_empty() {
-                    *column += 1;
+                    consumed += char_len;
+                    if let Some(m) = map {
+                        let pos = m.get(cursor + consumed);
+                        *line = pos.0;
+                        *column = pos.1;
+                    } else {
+                        *column += 1;
+                    }
+                    start_line = *line;
                     start_column = *column;
                     continue;
                 }
-                let token = build_token(&lexeme, &token_tag, symbol_table, start_line, start_column)?;
-                *column += 1;
+                let token =
+                    build_token(&lexeme, &token_tag, symbol_table, start_line, start_column)?;
                 return Ok((Some(token), consumed));
             }
             _ => {}
         }
 
         lexeme.push(c);
-        *column += 1;
+        consumed += char_len;
+
+        // Update line/column for the NEXT character
+        if let Some(m) = map {
+            let pos = m.get(cursor + consumed);
+            *line = pos.0;
+            *column = pos.1;
+        } else {
+            *column += 1;
+        }
 
         if NUMBER_REGEX.is_match(&lexeme) {
             token_tag = TokenClassTag::Number;
@@ -235,8 +273,14 @@ fn get_token(
             // The current char broke every classification. Roll it back and
             // emit whatever we had before.
             lexeme.pop();
-            consumed -= c.len_utf8();
-            *column -= 1;
+            consumed -= char_len;
+            if let Some(m) = map {
+                let pos = m.get(cursor + consumed);
+                *line = pos.0;
+                *column = pos.1;
+            } else {
+                *column -= 1;
+            }
             let token = build_token(&lexeme, &token_tag, symbol_table, start_line, start_column)?;
             return Ok((Some(token), consumed));
         }

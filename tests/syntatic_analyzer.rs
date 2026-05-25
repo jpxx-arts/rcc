@@ -8,8 +8,8 @@ use rcc::preprocessor;
 use rcc::syntatic_analyzer::{self, ParseError};
 
 fn parse_source(src: &str) -> Result<(), ParseError> {
-    let preprocessed = preprocessor::preprocess(src).expect("preprocess should succeed");
-    let (tokens, _symbol_table) = lexical_analyzer::get_tokens(&preprocessed);
+    let (preprocessed, map) = preprocessor::preprocess(src).expect("preprocess should succeed");
+    let (tokens, _symbol_table) = lexical_analyzer::get_tokens_with_map(&preprocessed, Some(&map));
     syntatic_analyzer::parse(&tokens)
 }
 
@@ -104,9 +104,7 @@ mod expressions {
     use super::*;
 
     fn parse_with_exp(exp: &str) -> Result<(), ParseError> {
-        let src = format!(
-            "class Main {{ public static void main(String[] a) {{ x = {exp}; }} }}"
-        );
+        let src = format!("class Main {{ public static void main(String[] a) {{ x = {exp}; }} }}");
         parse_source(&src)
     }
 
@@ -219,7 +217,8 @@ mod errors {
 
     #[test]
     fn missing_paren() {
-        let src = "class Main { public static void main(String[] a) { if true x = 1; else x = 2; } }";
+        let src =
+            "class Main { public static void main(String[] a) { if true x = 1; else x = 2; } }";
         assert!(parse_source(src).is_err());
     }
 
