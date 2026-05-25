@@ -1,0 +1,815 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+% \usepackage[brazil]{babel}  % comentado: babel-portugues não disponível neste TeX Live
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{geometry}
+
+\geometry{margin=2.5cm}
+
+% ----- Estilo para listagens de código Rust -----
+\definecolor{codebg}{rgb}{0.97,0.97,0.97}
+\definecolor{codekw}{rgb}{0.40,0.20,0.60}
+\definecolor{codestr}{rgb}{0.30,0.55,0.30}
+\definecolor{codecmt}{rgb}{0.50,0.50,0.50}
+\definecolor{codetype}{rgb}{0.20,0.45,0.65}
+
+\lstdefinelanguage{Rust}{
+  morekeywords={
+    let,mut,fn,pub,use,mod,struct,enum,impl,trait,for,while,loop,if,else,match,
+    return,break,continue,as,in,ref,move,static,const,where,self,Self,
+    crate,super,box,unsafe,extern,type,dyn
+  },
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]{"}
+}
+
+\lstset{
+  language=Rust,
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{codecmt}\itshape,
+  stringstyle=\color{codestr},
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{black!20},
+  numbers=left,
+  numberstyle=\tiny\color{black!50},
+  breaklines=true,
+  showstringspaces=false,
+  tabsize=2,
+  captionpos=b,
+  xleftmargin=1em,
+  upquote=true,
+  literate={á}{{\'a}}1 {ã}{{\~a}}1 {â}{{\^a}}1
+           {é}{{\'e}}1 {ê}{{\^e}}1
+           {í}{{\'i}}1
+           {ó}{{\'o}}1 {ô}{{\^o}}1 {õ}{{\~o}}1
+           {ú}{{\'u}}1
+           {ç}{{\c{c}}}1
+           {Á}{{\'A}}1 {É}{{\'E}}1 {Í}{{\'I}}1 {Ó}{{\'O}}1 {Ú}{{\'U}}1
+}
+
+% ----- Metadados -----
+\title{\Large\textbf{Relatório Técnico} \\[0.4em]
+  \large Trabalho 1 -- DIM0164 Compiladores 2026.1 \\
+  Pré-processador, Analisador Léxico e Analisador Sintático para
+  uma variante de Java}
+\author{João Pedro Araújo, João Paulo Oliveira, Gabriel Sebastião}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent Este relatório descreve a implementação em Rust de um \emph{frontend}
+de compilador composto por três fases: pré-processador, analisador léxico e
+analisador sintático. A linguagem-fonte é uma variante simplificada de Java
+(MiniJava) definida na disciplina. Documenta-se a fundamentação teórica das
+fases, as estruturas de dados escolhidas, as decisões de design, as
+transformações aplicadas à gramática e os mecanismos de reporte de erros.
+\end{abstract}
+
+\section{Introdução: Fundamentação Teórica}
+
+O projeto de um compilador é tradicionalmente dividido em duas grandes
+partes: \textbf{análise} e \textbf{síntese}. A fase de análise mapeia o
+código-fonte para representações gramaticais bem definidas, gera um código
+intermediário e indica erros ao programador por meio de mensagens
+específicas. A fase de síntese transforma o código intermediário em código
+final e, opcionalmente, realiza otimizações~\cite{aho2006compilers}.
+
+A análise propriamente dita é, por sua vez, escalonada em estágios:
+
+\begin{enumerate}
+  \item \textbf{Pré-processamento} (\emph{scanning} no Dragon Book) --
+    elimina comentários e normaliza espaços em branco. Cuida do código
+    bruto antes que ele alcance os autômatos do analisador léxico.
+  \item \textbf{Análise léxica} -- agrupa caracteres em \emph{lexemas},
+  popula a \emph{tabela de símbolos} para fases posteriores e produz
+  \emph{tokens} no formato $\langle\text{text-name}, \text{attribute-value}\rangle$~\cite[\S3.1.3]{aho2006compilers}.
+  \item \textbf{Análise sintática} -- combina os tokens em uma árvore
+    sintática (explícita ou implícita) que respeita a gramática
+    livre-de-contexto da linguagem.
+  \item \textbf{Análise semântica} -- verifica propriedades que escapam
+    à gramática (tipos, escopos) usando a tabela de símbolos enriquecida.
+  \item \textbf{Geração de código intermediário e final} --
+    propósito da fase de síntese.
+\end{enumerate}
+
+Este trabalho cobre os três primeiros estágios. As fases posteriores ficam
+para trabalhos subsequentes da disciplina.
+
+\paragraph{Por que separar pré-processamento e análise léxica?}
+Embora os dois manipulem o fluxo bruto de caracteres, separar
+responsabilidades torna o código mais legível e localiza decisões
+ortogonais. O pré-processador é um \emph{transdutor} simples: lê uma
+\texttt{String} e produz outra. O analisador léxico opera sobre essa
+\texttt{String} já saneada e produz uma estrutura tipada (lista de
+\texttt{Token}). A pequena duplicação de lógica de classificação de
+caracteres compensa pela clareza arquitetural.
+
+\paragraph{Por que regex em vez de DFA explícito?}
+O Dragon Book apresenta dois caminhos para análise léxica: construir um
+autômato finito determinístico (DFA) manualmente, ou descrever os padrões
+com expressões regulares e deixar um gerador (\texttt{lex}, \texttt{flex})
+transformá-las em DFA. Optei por um meio-termo: usar a crate
+\texttt{regex} de Rust diretamente para verificar prefixos contra cada
+classe de token, sem gerar um DFA explícito. A motivação foi
+pragmática --- tempo curto, recomendação do professor e foco
+não-prioritário em construção manual de autômatos.
+
+\section{Visão Geral da Arquitetura}
+
+O \emph{frontend} é organizado em três módulos Rust, mais um \emph{driver}
+em \texttt{main.rs}:
+
+\begin{center}
+\begin{tabular}{l|l}
+\textbf{Módulo} & \textbf{Responsabilidade} \\ \hline
+\texttt{preprocessor} & Remove comentários e whitespace redundante \\
+\texttt{lexical\_analyzer} & Produz \texttt{Vec<Token>} e \texttt{SymbolTable} \\
+\texttt{syntatic\_analyzer} & Verifica corretude sintática \\
+\texttt{main} & Compõe a \emph{pipeline} e formata a saída \\
+\end{tabular}
+\end{center}
+
+A composição vive em \texttt{src/main.rs}:
+
+\begin{lstlisting}[caption={Pipeline em \texttt{main.rs}}]
+fn compile(source: &str) -> Result<SymbolTable, CompileError> {
+    let preprocessed = preprocessor::preprocess(source)?;
+    let (tokens, symbol_table) = lexical_analyzer::get_tokens(&preprocessed);
+    syntatic_analyzer::parse(&tokens)?;
+    Ok(symbol_table)
+}
+\end{lstlisting}
+
+\section{Pré-processador}
+
+O pré-processador cumpre os requisitos da spec: remove comentários de
+linha (\verb|//|) e de bloco (\verb|/* */|), além de normalizar
+whitespace em excesso. Devolve uma \texttt{String} (não um arquivo).
+
+\subsection{Decisão: regex com flags estendidas}
+
+Em vez de varredura manual caractere a caractere, uso três expressões
+regulares compostas, todas pré-compiladas com \texttt{LazyLock} para
+evitar recompilar a cada chamada:
+
+\begin{lstlisting}[caption={Regexes globais com inicialização preguiçosa}]
+static COMMENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?x)/\*(?s:.*?)\*/ | //.*(?m:$)")
+        .expect("Preprocessor - Comment Regex Failed")
+});
+
+static MEANINGFUL_WS_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?<end_char>[[:word:]])[[:space:]--\n]+(?<start_char>[[:word:]])")
+        .expect("Preprocessor - Meaningful Whitespace Regex Failed")
+});
+\end{lstlisting}
+
+As \emph{flags} usadas são parte do que torna o padrão legível:
+\texttt{(?x)} permite espaços e quebras dentro do regex; \texttt{(?s:)}
+faz \texttt{.} casar com \verb|\n|; \texttt{(?m:\$)} faz \verb|$| casar
+no fim de linha. A subtração \texttt{[[:space:]--\textbackslash n]}
+exclui \verb|\n| da classe de espaços, permitindo preservar quebras
+para o rastreamento de linha pelo analisador léxico.
+
+\subsection{Classes W, P, S e a regra da não-aglutinação}
+
+Para que o pré-processador não funda lexemas adjacentes, ele precisa de
+um nível mínimo de consciência léxica. Adoto a divisão clássica em três
+classes de \emph{símbolos atômicos}:
+
+\begin{itemize}
+  \item \textbf{W} (\emph{word}): caracteres alfanuméricos e \verb|_|.
+  \item \textbf{P} (\emph{punctuation}): operadores e delimitadores.
+  \item \textbf{S} (\emph{space}): espaços, tabs, quebras de linha.
+\end{itemize}
+
+A armadilha está em \texttt{W+S+W}: o espaço entre dois caracteres da
+classe W \emph{deve ser preservado}, do contrário palavras-chave se
+fundem com identificadores (\verb|int x| viraria \verb|intx|). Para os
+demais casos (\texttt{W+S+P}, \texttt{P+S+W}, \texttt{P+S+P}) a remoção
+é segura porque a fronteira já é discernível pelo próprio P.
+
+A implementação usa a técnica \emph{substitute-strip-restore}: primeiro
+marco com um caractere de controle (\verb|\x1A|, SUBSTITUTE da tabela
+ASCII) o espaço significativo, depois apago todos os outros, e por fim
+restauro:
+
+\begin{lstlisting}[caption={Iteração de ponto fixo + marcador + restauração}]
+const SUBSTITUTE: char = '\x1A';
+const PRESERVE_CHARS_TEMPLATE: &str = "$end_char\x1A$start_char";
+
+pub fn remove_unnecessary_white_spaces(src: &str) -> String {
+    let mut output = String::from(src);
+    loop {
+        let next: String = MEANINGFUL_WS_REGEX
+            .replace_all(&output, PRESERVE_CHARS_TEMPLATE)
+            .into();
+        if output == next { break; }
+        output = next;
+    }
+    let output: String = NON_NEWLINE_WS_REGEX.replace_all(&output, "").into();
+    output.replace(SUBSTITUTE, " ")
+}
+\end{lstlisting}
+
+A iteração em ponto fixo é necessária porque \texttt{replace\_all} da
+crate \texttt{regex} é \emph{não-sobreposto}: em uma cadeia de tokens
+curtos como \texttt{a b c d}, uma única passada captura apenas
+\texttt{(a,b)} e \texttt{(c,d)}, perdendo o separador entre \texttt{b}
+e \texttt{c}. Iterar até convergência garante que todos os pares sejam
+processados.
+
+\subsection{Preservação de linhas em comentários de bloco}
+
+Um comentário de bloco multi-linha \emph{deveria} sumir, mas suas
+quebras de linha precisam \textbf{sobreviver}: sem elas o analisador
+léxico contaria mal as linhas em mensagens de erro. A solução é
+substituir cada comentário por \verb|\n| repetido pelo número de
+quebras internas:
+
+\begin{lstlisting}[caption={Closure que preserva linhas de comentários removidos}]
+let output: String = COMMENT_REGEX
+    .replace_all(src, |caps: &Captures| {
+        let matched = caps.get(0).unwrap().as_str();
+        if matched.starts_with("/*") {
+            "\n".repeat(matched.matches('\n').count())
+        } else {
+            String::new()
+        }
+    }).into();
+\end{lstlisting}
+
+\subsection{Detecção de \texttt{/*} sem fechamento}
+
+Após remover todos os comentários fechados, qualquer \verb|/*| restante
+indica um comentário não fechado. A linha original é recuperada
+contando quebras antes da posição do marcador (apoiado na
+preservação descrita acima):
+
+\begin{lstlisting}[caption={Diagnóstico de comentário aberto}]
+if let Some(pos) = output.find("/*") {
+    let line = output[..pos].matches('\n').count() + 1;
+    return Err(PreprocessError::UnclosedBlockComment { line });
+}
+\end{lstlisting}
+
+A assinatura de \texttt{preprocess} reflete a possibilidade de erro:
+\texttt{Result<String, PreprocessError>}.
+
+\section{Analisador Léxico}
+
+\subsection{Estruturas de Dados}
+
+A estrutura central segue a convenção do Dragon Book
+(\S3.1.3, Tabela 3.4) com um \emph{token name} (classe abstrata) e um
+\emph{attribute value} (ponteiro para a tabela de símbolos ou o lexema
+embutido):
+
+\begin{lstlisting}[caption={\texttt{Token}, \texttt{TokenClass} e \texttt{TokenAttribute}}]
+#[derive(Debug, Clone, PartialEq)]
+pub enum TokenClass {
+    ID,
+    NUMBER,
+    KEYWORD(String),
+    OPERATION,
+    DELIMITER,
+    EOF,
+    UNKNOWN,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TokenAttribute {
+    Pointer(usize),
+    Itself(String),
+    Null,
+}
+
+#[derive(Debug, Clone)]
+pub struct Token {
+    pub token_name: TokenClass,
+    pub attribute_value: TokenAttribute,
+    pub line: usize,
+    pub column: usize,
+}
+\end{lstlisting}
+
+A escolha de carregar \texttt{line} e \texttt{column} \emph{em cada
+token} é importante: o analisador sintático produz mensagens de erro
+com posição exata sem precisar consultar a fonte original.
+
+\subsection{Tabela de Símbolos com \emph{Interning}}
+
+A tabela de símbolos combina dois containers: um \texttt{Vec} para
+acessos por índice (o \emph{ponteiro} embutido nos tokens) e um
+\texttt{HashMap} para detectar reaparecimentos de um mesmo lexema em
+tempo $O(1)$ amortizado. Esse padrão é conhecido como \emph{string
+interning} e é o mesmo usado por compiladores reais (LLVM, rustc).
+
+\begin{lstlisting}[caption={\texttt{SymbolTable}, \texttt{SymbolTableEntry} e \texttt{intern()}}]
+#[derive(Debug, Clone, PartialEq)]
+pub enum SymbolKind {
+    Variable,
+    Number,
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolTableEntry {
+    pub lexeme: String,
+    pub kind: SymbolKind,
+    pub type_info: Option<String>,
+    pub first_line: usize,
+    pub first_column: usize,
+}
+
+#[derive(Debug)]
+pub struct SymbolTable {
+    pub registers: Vec<SymbolTableEntry>,
+    intern_map: HashMap<String, usize>,
+}
+
+impl SymbolTable {
+    fn intern(&mut self, lexeme: &str, kind: SymbolKind,
+              line: usize, column: usize) -> usize {
+        if let Some(&idx) = self.intern_map.get(lexeme) {
+            return idx;
+        }
+        let idx = self.registers.len();
+        self.registers.push(SymbolTableEntry {
+            lexeme: lexeme.to_string(),
+            kind,
+            type_info: None,
+            first_line: line,
+            first_column: column,
+        });
+        self.intern_map.insert(lexeme.to_string(), idx);
+        idx
+    }
+}
+\end{lstlisting}
+
+O campo \texttt{type\_info} fica reservado para o analisador semântico
+preencher em fase posterior --- o léxico não tem informação suficiente
+para inferir tipos.
+
+\subsection{Algoritmo de Longest-Match}
+
+Para cada token, o léxico tenta estender o lexema enquanto houver
+\emph{alguma} classe de token cuja regex (ancorada) case com o lexema
+completo. Quando estender deixa de produzir match, faz-se \emph{back-up}
+de um caractere e o token é emitido com a última classe válida:
+
+\begin{lstlisting}[caption={Núcleo de \texttt{get\_token} (simplificado)}]
+for c in src.chars() {
+    consumed += c.len_utf8();
+    // ... tratamento de '\n' e whitespace ...
+    lexeme.push(c);
+    *column += 1;
+
+    if NUMBER_REGEX.is_match(&lexeme) {
+        token_tag = TokenClassTag::Number;
+    } else if KEYWORD_REGEX.is_match(&lexeme) {
+        token_tag = TokenClassTag::Keyword(lexeme.clone());
+    } else if ID_REGEX.is_match(&lexeme) {
+        token_tag = TokenClassTag::Id;
+    } else if DELIMITER_REGEX.is_match(&lexeme) {
+        token_tag = TokenClassTag::Delimiter;
+    } else if OPERATION_REGEX.is_match(&lexeme) {
+        token_tag = TokenClassTag::Operation;
+    } else if lexeme == "&" {
+        continue; // caso especial para `&&`
+    } else {
+        lexeme.pop();
+        consumed -= c.len_utf8();
+        *column -= 1;
+        let token = build_token(&lexeme, &token_tag, symbol_table,
+                                start_line, start_column)?;
+        return Ok((Some(token), consumed));
+    }
+}
+\end{lstlisting}
+
+\textbf{Anchorage e disambiguação.} As regexes usam \verb|^...$| para
+exigir match completo. Isso resolve a confusão clássica entre
+identificador e palavra-chave: \texttt{class1} casa só com a regex
+de identificador (não com a de keyword), \texttt{class} casa com as
+duas --- a ordem do cascade (\texttt{KEYWORD} antes de \texttt{ID})
+privilegia a palavra-chave.
+
+\textbf{Caso especial para \texttt{\&\&}.} Como \verb|&| sozinho não
+casa nenhuma classe ancorada, um token de dois caracteres como
+\verb|&&| quebraria o algoritmo. A solução pragmática é detectar o
+prefixo de um caractere e estender:
+\verb|else if lexeme == "&" { continue; }|. É \emph{brittle} para
+gramáticas com mais operadores multi-caractere, mas funciona para a
+nossa, em que \verb|&&| é o único caso.
+
+\textbf{Contador \texttt{consumed}.} Whitespace e newlines descartados
+\emph{antes} do início do lexema ainda foram lidos pelo cursor. Manter
+um contador separado de bytes consumidos (que inclui os descartes)
+evita off-by-one ao reportar o avanço para o \emph{caller}.
+
+\subsection{Tokens Especiais e Reportagem de Erros}
+
+\paragraph{EOF.} Após o laço principal, \texttt{get\_tokens} sempre
+empurra um token \texttt{TokenClass::EOF}. O parser pode então olhar
+sempre o próximo token sem checar bound.
+
+\paragraph{Sugestões para identificadores inválidos.} Quando um lexema
+não casa nenhuma classe, calculamos sua distância de Levenshtein
+contra a lista de palavras-chave (via crate \texttt{strsim}) e, se
+houver alguma a no máximo $2$ de distância, incluímos a sugestão na
+mensagem:
+
+\begin{lstlisting}[caption={Sugestão por distância de edição}]
+fn suggest_keyword(lexeme: &str) -> Option<String> {
+    if lexeme.is_empty() { return None; }
+    KEYWORDS_LIST
+        .iter()
+        .map(|kw| (*kw, strsim::levenshtein(lexeme, kw)))
+        .filter(|(_, d)| *d <= 2)
+        .min_by_key(|(_, d)| *d)
+        .map(|(kw, _)| kw.to_string())
+}
+\end{lstlisting}
+
+Exemplo: dado \verb|claas|, o usuário vê
+\texttt{Unknown lexeme: 'claas'. Did you mean: 'class'?}.
+
+\section{Analisador Sintático}
+
+\subsection{Transformação da Gramática}
+
+A spec exige que a gramática seja preparada por \emph{eliminação de
+recursão à esquerda} e \emph{fatoração à esquerda}. O documento
+\texttt{specs/gramatica-transformada.md} registra todas as alterações;
+três pontos merecem destaque:
+
+\paragraph{1. Recursão à esquerda em \texttt{Exp}.} O esquema padrão
+$A \to A\alpha \mid \beta$ vira $A \to \beta A'$, $A' \to \alpha A'
+\mid \lambda$. A produção original
+
+\begin{verbatim}
+Exp -> Exp '&&' Exp | Exp '>' Exp | Exp '+' Exp | ... | Id | Number
+\end{verbatim}
+
+\noindent fica:
+
+\begin{verbatim}
+Exp     -> ExpBase ExpRest
+ExpBase -> 'new' NewRest | '!' Exp | '(' Exp ')'
+         | 'true' | 'false' | 'this' | Id | Number
+ExpRest -> '&&' Exp ExpRest | '<' Exp ExpRest | '>' Exp ExpRest
+         | '+' Exp ExpRest | '-' Exp ExpRest | '*' Exp ExpRest
+         | '[' Exp ']' ExpRest | '.' DotRest ExpRest | $\lambda$
+\end{verbatim}
+
+\paragraph{2. Sequência de comandos.} A gramática original admite
+apenas \emph{um único} \texttt{Cmd} por bloco. Como os arquivos de
+teste (\texttt{prog-bubblesort.ling}, \texttt{prog-factorial.ling})
+exigem sequências, introduzi:
+
+\begin{verbatim}
+Cmds -> Cmd Cmds | $\lambda$
+\end{verbatim}
+
+\noindent e substituí \texttt{Cmd} por \texttt{Cmds} no corpo de
+\texttt{MainC}, em \texttt{DefMet} e dentro de \texttt{Cmd -> '\{' Cmds '\}'}.
+
+\paragraph{3. Fatorações pontuais.} Em \texttt{Type} entre
+\texttt{int} e \texttt{int []}; em \texttt{Cmd} no prefixo
+\texttt{Id} (separando \texttt{=} de \texttt{[ Exp ]}); em
+\texttt{ExpBase} no prefixo \texttt{new}; em \texttt{ListExp} com a
+alternativa $\lambda$ promovida ao chamador.
+
+\paragraph{4. Operador \texttt{<}.} A \texttt{gramatica.md} original
+lista apenas \verb|>| como operador relacional, mas
+\texttt{bubblesort.ling} e \texttt{factorial.ling} usam \verb|<|.
+Acrescentei \verb|<| simetricamente ao \verb|>|.
+
+\subsection{Estratégia: Descendente Recursivo}
+
+Optei por um \textbf{analisador descendente recursivo}. As alternativas
+seriam um \emph{table-driven} preditivo (LL(1) com tabela explícita) ou
+um gerador (ex.: \texttt{lalrpop}). O descendente recursivo escolhi
+por três razões:
+
+\begin{itemize}
+  \item \textbf{Legibilidade}: cada não-terminal vira uma função;
+    o fluxo do código espelha a gramática.
+  \item \textbf{Reportagem de erros}: mais flexível que tabela
+    preditiva pura --- dá pra fabricar mensagens contextuais.
+  \item \textbf{Sem dependências}: gerador adicionaria peso ao
+    \emph{build}.
+\end{itemize}
+
+\subsection{Estrutura}
+
+O parser carrega apenas o slice de tokens e um cursor:
+
+\begin{lstlisting}[caption={Estrutura do parser}]
+pub struct Parser<'a> {
+    tokens: &'a [Token],
+    cursor: usize,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct ParseError {
+    pub line: usize,
+    pub column: usize,
+    pub msg: String,
+}
+\end{lstlisting}
+
+Cada não-terminal da gramática transformada corresponde a um método
+privado. Em \texttt{Cmd} a estrutura é especialmente clara:
+
+\begin{lstlisting}[caption={Trecho de \texttt{parse\_cmd}}]
+fn parse_cmd(&mut self) -> Result<(), ParseError> {
+    let t = self.peek();
+    if Self::is_keyword(t, "if") {
+        self.advance();
+        self.expect_delim("(")?;
+        self.parse_exp()?;
+        self.expect_delim(")")?;
+        self.parse_cmd()?;
+        self.expect_keyword("else")?;
+        self.parse_cmd()?;
+        return Ok(());
+    }
+    if Self::is_keyword(t, "while") {
+        self.advance();
+        self.expect_delim("(")?;
+        self.parse_exp()?;
+        self.expect_delim(")")?;
+        self.parse_cmd()?;
+        return Ok(());
+    }
+    // ... outros ramos ...
+}
+\end{lstlisting}
+
+\subsection{Disambiguação por \emph{Lookahead}}
+
+Duas situações exigem mais de um token de \emph{lookahead}:
+
+\paragraph{DefVar vs Cmd com \texttt{Id} no início.} A gramática
+permite \texttt{Type Id ;} (declaração com tipo custom) ou
+\texttt{Id = Exp ;} (atribuição). Ambos começam com um \texttt{Id}.
+A regra usa o token seguinte: se for outro \texttt{Id}, é
+declaração; se for \texttt{=} ou \texttt{[}, é comando.
+
+\begin{lstlisting}[caption={Discriminação por \emph{lookahead}-2}]
+fn at_def_var(&self) -> bool {
+    let t = self.peek();
+    if Self::is_keyword(t, "int") || Self::is_keyword(t, "boolean") {
+        return true;
+    }
+    if Self::is_id(t) {
+        return Self::is_id(self.peek_at(1));
+    }
+    false
+}
+\end{lstlisting}
+
+\paragraph{\texttt{DotRest}: \texttt{.length} vs \texttt{.metodo(args)}.}
+Após \verb|.| dentro de uma expressão, o próximo token pode ser a
+palavra-chave \texttt{length} (acesso) ou um \texttt{Id} seguido de
+\verb|(...)| (chamada de método). \emph{Lookahead}-1 sobre o tipo do
+próximo token resolve.
+
+\subsection{Reportagem de Erros}
+
+A função \texttt{error} captura o token corrente e o estiliza:
+
+\begin{lstlisting}[caption={Erro com posição e descrição do token corrente}]
+fn error(&self, msg: String) -> ParseError {
+    let tok = self.peek();
+    let got = describe_token(tok);
+    ParseError {
+        line: tok.line,
+        column: tok.column,
+        msg: format!("{msg}, got {got}"),
+    }
+}
+\end{lstlisting}
+
+\noindent o que dá mensagens como
+\verb|expected ';', got '}'| acompanhadas de linha e coluna do
+token ofensor. Isso atende ao requisito da spec de informar
+``exatamente o local e o tipo do erro''.
+
+\subsection{Precedência de Operadores}
+
+Em uma transformação ingênua, o esquema $A \to A\alpha \mid \beta$
+elimina recursão à esquerda mas perde precedência: \texttt{a + b * c}
+seria parseado como \texttt{(a+b)*c}. Para preservar a precedência
+matemática (e o que é natural pra um programador de C/Java), a
+gramática de expressões foi \textbf{estratificada em níveis}, do
+menor para o maior:
+
+\begin{verbatim}
+Exp        -> ExpAnd
+ExpAnd     -> ExpRel  ( '&&' ExpRel )*
+ExpRel     -> ExpAdd  ( ('<'|'>') ExpAdd )*
+ExpAdd     -> ExpMul  ( ('+'|'-') ExpMul )*
+ExpMul     -> ExpUnary( '*'      ExpUnary )*
+ExpUnary   -> '!' ExpUnary | ExpPostfix
+ExpPostfix -> ExpPrimary ( '[' Exp ']' | '.' DotRest )*
+ExpPrimary -> 'new' NewRest | '(' Exp ')'
+            | 'true' | 'false' | 'this' | Id | Number
+\end{verbatim}
+
+Cada nível associa à esquerda via \emph{loop} iterativo (não recursão
+à direita) e delega ao nível imediatamente superior em precedência.
+A AST resultante para \texttt{a + b * c} é
+\texttt{Add(Id(a), Mul(Id(b), Id(c)))}, com \texttt{*} ligando mais
+forte que \texttt{+}.
+
+\begin{lstlisting}[caption={Nível \texttt{ExpAdd}: \texttt{+} e \texttt{-} associando à esquerda}]
+fn parse_exp_add(&mut self) -> Result<Expr, ParseError> {
+    let mut left = self.parse_exp_mul()?;
+    loop {
+        let op = if Self::is_op_str(self.peek(), "+") {
+            BinOp::Add
+        } else if Self::is_op_str(self.peek(), "-") {
+            BinOp::Sub
+        } else {
+            break;
+        };
+        self.advance();
+        let right = self.parse_exp_mul()?;
+        left = Expr::Binary(op, Box::new(left), Box::new(right));
+    }
+    Ok(left)
+}
+\end{lstlisting}
+
+A AST nasce então com a árvore corretamente moldada pela precedência,
+de graça, sem rotações pós-parsing.
+
+\subsection{AST como saída para a próxima fase}
+
+A spec pede apenas mensagem de corretude e a tabela de símbolos.
+Implementei \textbf{além} disso uma AST explícita
+(\texttt{src/syntatic\_analyzer/ast.rs}) para servir de entrada à
+fase semântica. Os principais tipos são:
+
+\begin{lstlisting}[caption={Tipos da AST}]
+pub struct Program {
+    pub main: MainClass,
+    pub classes: Vec<ClassDecl>,
+}
+
+pub enum Stmt {
+    Block(Vec<Stmt>),
+    If(Expr, Box<Stmt>, Box<Stmt>),
+    While(Expr, Box<Stmt>),
+    Println(Expr),
+    Assign(String, Expr),
+    ArrayAssign(String, Expr, Expr),
+}
+
+pub enum Expr {
+    Number(String), Id(String), Bool(bool), This,
+    NewObject(String),                       // new ClassName()
+    NewIntArray(Box<Expr>),                  // new int[size]
+    Not(Box<Expr>),
+    Binary(BinOp, Box<Expr>, Box<Expr>),
+    Index(Box<Expr>, Box<Expr>),              // a[b]
+    Length(Box<Expr>),                        // a.length
+    Call(Box<Expr>, String, Vec<Expr>),       // a.method(args)
+}
+\end{lstlisting}
+
+Cada \texttt{parse\_X} agora devolve o nó AST correspondente:
+\texttt{parse\_prog -> Program}, \texttt{parse\_cmd -> Stmt},
+\texttt{parse\_exp\_X -> Expr}, etc. Não-terminais auxiliares
+(\texttt{NewRest}, \texttt{DotRest}, \texttt{ExpAndRest}, etc.) NÃO
+geram nós próprios --- são absorvidos pelo nó pai.
+
+A AST é referenciada pelos próximos estágios sem cópia: a
+\texttt{SymbolTable} (com \emph{interning}) já provê identidade
+estável de identificadores; a AST guarda o lexema diretamente
+(\texttt{Id(String)}) para legibilidade da árvore.
+
+A assinatura final do parser é:
+\[
+\texttt{parse(tokens, symbol\_table)} \to
+\texttt{Result<Program, ParseError>}
+\]
+
+O \texttt{main} imprime o programa, a tabela de símbolos e a AST
+formatada via \verb|{:#?}|:
+
+\begin{lstlisting}[caption={Saída do compilador (sucesso)}]
+Ok((program, symbol_table)) => {
+    println!("código está sintaticamente correto");
+    print_symbol_table(&symbol_table);
+    println!("\nárvore sintática abstrata:");
+    println!("{program:#?}");
+    ExitCode::SUCCESS
+}
+\end{lstlisting}
+
+\section{Resultados}
+
+\subsection{Cobertura de Testes}
+
+A suíte de testes de integração tem \textbf{137 testes verde}
+distribuídos em três arquivos:
+
+\begin{center}
+\begin{tabular}{l|r}
+\textbf{Suíte} & \textbf{Testes} \\ \hline
+\texttt{tests/preprocessor.rs} & 37 \\
+\texttt{tests/lexical\_analyzer.rs} & 52 \\
+\texttt{tests/syntatic\_analyzer.rs} & 48 \\
+\hline
+\textbf{Total} & \textbf{137} \\
+\end{tabular}
+\end{center}
+
+\noindent A suíte do parser inclui testes específicos verificando o
+\textbf{shape da AST} (precedência aritmética, associatividade
+esquerda de \texttt{+/-}, \texttt{*} ligando mais forte que
+\texttt{+}, \texttt{\&\&} ligando mais fraco que \texttt{</>}, e
+parênteses sobrepondo precedência).
+
+\noindent As suítes do léxico cobrem cada classe de token, casos de
+\emph{longest-match}, sequências multi-token, \emph{interning} de
+identificadores e rastreamento de linha/coluna. As do parser cobrem
+programas mínimos, todos os tipos de comandos, todas as formas de
+expressão, casos de erro com verificação de linha/coluna e
+\emph{end-to-end} dos fixtures \texttt{bubblesort.ling} e
+\texttt{factorial.ling}.
+
+\subsection{Programas de Exemplo}
+
+Os dois programas exemplos da disciplina passam pelo pipeline
+completo:
+
+\begin{verbatim}
+$ cargo run -- specs/prog-bubblesort.ling
+código está sintaticamente correto
+
+tabela de símbolos:
+     #  lexeme                    kind        type        line     col
+     0  BubbleSort                Variable  -              1       7
+     ...
+
+$ cargo run -- specs/prog-factorial.ling
+código está sintaticamente correto
+
+tabela de símbolos:
+     #  lexeme                    kind        type        line     col
+     0  Factorial                 Variable  -              1       7
+     1  a                         Variable  -              2      33
+     ...
+\end{verbatim}
+
+\section{Conclusão}
+
+O \emph{frontend} resultante atende aos requisitos do trabalho:
+
+\begin{itemize}
+  \item Pré-processador remove comentários e whitespace excessivo,
+    preserva quebras de linha de comentários para rastreamento
+    posterior, detecta \verb|/*| não fechado.
+  \item Analisador léxico produz tokens com classe, atributo, linha e
+    coluna, mantém uma tabela de símbolos com \emph{interning},
+    sugere correções para identificadores tipados errados.
+  \item Analisador sintático descendente recursivo opera sobre a
+    gramática transformada (recursão à esquerda removida, fatoração à
+    esquerda aplicada), reporta erros com localização exata.
+\end{itemize}
+
+A escolha de Rust contribuiu para o resultado em duas direções: o
+sistema de tipos forçou clareza nas fronteiras entre fases
+(\texttt{Result} obriga a tratar erros) e a crate \texttt{regex} (com
+suporte nativo a classes POSIX e operações entre classes) reduziu
+significativamente a quantidade de código manual de varredura.
+
+Como trabalhos futuros, ficam pendentes: a fase de análise semântica
+(preenchimento do campo \texttt{type\_info} da tabela de símbolos com
+tipos inferidos), a construção explícita de AST se a fase seguinte
+exigir, e a geração de código intermediário.
+
+\begin{thebibliography}{9}
+\bibitem{aho2006compilers}
+A.~V. Aho, M.~S. Lam, R.~Sethi, J.~D. Ullman.
+\emph{Compilers: Principles, Techniques, and Tools (Dragon Book)}.
+2.~ed. Addison-Wesley, 2006.
+\end{thebibliography}
+
+\end{document}
