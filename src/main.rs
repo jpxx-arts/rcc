@@ -2,10 +2,10 @@
 //!
 //! Usage: `rcc <file.ling>`
 //!
-//! Pipeline: preprocessor → lexical analyzer → syntactic analyzer.
-//! On success prints "código está sintaticamente correto" and dumps the
-//! symbol table populated during lexing. On error prints the diagnostic
-//! with line and column.
+//! Pipeline: preprocessor -> lexical analyzer -> syntactic analyzer.
+//! On success prints "code is syntactically correct" followed by the symbol
+//! table populated during lexing. On error prints the diagnostic with line
+//! and column information.
 
 use std::process::ExitCode;
 
@@ -30,21 +30,21 @@ fn main() -> ExitCode {
 
     match compile(&source) {
         Ok(symbol_table) => {
-            println!("código está sintaticamente correto");
+            println!("code is syntactically correct");
             print_symbol_table(&symbol_table);
             ExitCode::SUCCESS
         }
         Err(CompileError::Preprocess(err)) => {
             match err {
                 PreprocessError::UnclosedBlockComment { line } => {
-                    eprintln!("erro no pré-processamento (linha {line}): comentário de bloco não fechado");
+                    eprintln!("preprocessing error (line {line}): unclosed block comment");
                 }
             }
             ExitCode::FAILURE
         }
         Err(CompileError::Parse(err)) => {
             eprintln!(
-                "erro sintático (linha {}, coluna {}): {}",
+                "syntactic error (line {}, column {}): {}",
                 err.line, err.column, err.msg
             );
             ExitCode::FAILURE
@@ -77,9 +77,9 @@ fn compile(source: &str) -> Result<SymbolTable, CompileError> {
 }
 
 fn print_symbol_table(table: &SymbolTable) {
-    println!("\ntabela de símbolos:");
+    println!("\nsymbol table:");
     if table.registers.is_empty() {
-        println!("  (vazia)");
+        println!("  (empty)");
         return;
     }
     println!(
@@ -87,14 +87,11 @@ fn print_symbol_table(table: &SymbolTable) {
         "#", "lexeme", "kind", "type", "line", "col"
     );
     for (idx, entry) in table.registers.iter().enumerate() {
+        let kind = format!("{:?}", entry.kind);
+        let ty = entry.type_info.as_deref().unwrap_or("-");
         println!(
-            "  {:>4}  {:<24}  {:<10?}  {:<8}  {:>6}  {:>6}",
-            idx,
-            entry.lexeme,
-            entry.kind,
-            entry.type_info.as_deref().unwrap_or("-"),
-            entry.first_line,
-            entry.first_column,
+            "  {:>4}  {:<24}  {:<10}  {:<8}  {:>6}  {:>6}",
+            idx, entry.lexeme, kind, ty, entry.first_line, entry.first_column,
         );
     }
 }

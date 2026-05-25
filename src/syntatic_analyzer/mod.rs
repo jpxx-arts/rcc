@@ -339,20 +339,20 @@ impl<'a> Parser<'a> {
     }
 
     // ----------------------------------------------------------------
-    // Expressões estratificadas por precedência (do menor pro maior):
+    // Expressions stratified by operator precedence (lowest to highest):
     //
-    //   Exp        → ExpAnd
-    //   ExpAnd     → ExpRel ( '&&' ExpRel )*
-    //   ExpRel     → ExpAdd ( ('<' | '>') ExpAdd )*
-    //   ExpAdd     → ExpMul ( ('+' | '-') ExpMul )*
-    //   ExpMul     → ExpUnary ( '*' ExpUnary )*
-    //   ExpUnary   → '!' ExpUnary | ExpPostfix
-    //   ExpPostfix → ExpPrimary ( '[' Exp ']' | '.' DotRest )*
-    //   ExpPrimary → 'new' NewRest | '(' Exp ')'
+    //   Exp        -> ExpAnd
+    //   ExpAnd     -> ExpRel ( '&&' ExpRel )*
+    //   ExpRel     -> ExpAdd ( ('<' | '>') ExpAdd )*
+    //   ExpAdd     -> ExpMul ( ('+' | '-') ExpMul )*
+    //   ExpMul     -> ExpUnary ( '*' ExpUnary )*
+    //   ExpUnary   -> '!' ExpUnary | ExpPostfix
+    //   ExpPostfix -> ExpPrimary ( '[' Exp ']' | '.' DotRest )*
+    //   ExpPrimary -> 'new' NewRest | '(' Exp ')'
     //              | 'true' | 'false' | 'this' | Id | Number
     //
-    // Cada nível associa à esquerda (loop iterativo, não recursivo à
-    // direita) e delega ao nível imediatamente superior em precedência.
+    // Each level is left-associative (iterative loop rather than right
+    // recursion) and delegates to the next higher-precedence level.
     // ----------------------------------------------------------------
 
     fn parse_exp(&mut self) -> Result<(), ParseError> {
