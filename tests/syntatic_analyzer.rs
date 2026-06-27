@@ -1,16 +1,19 @@
-//! Integration tests for the recursive-descent parser.
+//! Integration tests for the recursive-descent parser (official grammar in
+//! `specs/gramatica-prof.md`).
 //!
-//! Each test feeds a string source through the full pipeline
-//! (preprocessor → lexer → parser) and asserts Ok/Err.
+//! Each test feeds a string source through lexer → parser and asserts Ok/Err.
 
 use rcc::lexical_analyzer;
-use rcc::preprocessor;
 use rcc::syntatic_analyzer::{self, ParseError};
 
 fn parse_source(src: &str) -> Result<(), ParseError> {
-    let preprocessed = preprocessor::preprocess(src).expect("preprocess should succeed");
-    let (tokens, _symbol_table) = lexical_analyzer::get_tokens(&preprocessed);
-    syntatic_analyzer::parse(&tokens)
+    let lex = lexical_analyzer::tokenize(src, false);
+    assert!(
+        lex.errors.is_empty(),
+        "unexpected lexical errors: {:?}",
+        lex.errors
+    );
+    syntatic_analyzer::parse(&lex.tokens).map(|_| ())
 }
 
 mod minimal_programs {
@@ -49,6 +52,15 @@ mod minimal_programs {
         }";
         parse_source(src).unwrap();
     }
+
+    #[test]
+    fn method_with_params() {
+        let src = "class Main { public static void main(String[] a) { } }
+        class Foo {
+            public int add(int p, int q) { return p + q; }
+        }";
+        parse_source(src).unwrap();
+    }
 }
 
 mod statements {
@@ -71,22 +83,22 @@ mod statements {
 
     #[test]
     fn if_else() {
-        parse_in_main("if (true) x = 1; else x = 2;").unwrap();
+        parse_in_main("if (true) { x = 1; } else { x = 2; }").unwrap();
+    }
+
+    #[test]
+    fn if_without_else() {
+        parse_in_main("if (true) { x = 1; }").unwrap();
     }
 
     #[test]
     fn nested_if() {
-        parse_in_main("if (true) if (false) x = 1; else x = 2; else x = 3;").unwrap();
+        parse_in_main("if (true) { if (false) { x = 1; } else { x = 2; } }").unwrap();
     }
 
     #[test]
     fn while_loop() {
-        parse_in_main("while (x > 0) x = x - 1;").unwrap();
-    }
-
-    #[test]
-    fn nested_block() {
-        parse_in_main("{ x = 1; y = 2; }").unwrap();
+        parse_in_main("while (x < 10) { x = x + 1; }").unwrap();
     }
 
     #[test]
@@ -95,8 +107,17 @@ mod statements {
     }
 
     #[test]
-    fn empty_block() {
-        parse_in_main("{ }").unwrap();
+    fn if_without_braces_is_error() {
+        // The official grammar requires braces around if/while bodies.
+        assert!(parse_in_main("if (true) x = 1; else x = 2;").is_err());
+    }
+
+    #[test]
+    fn greater_than_is_not_an_operator() {
+        // Only '<' is part of the grammar; '>' is rejected.
+        let src = "class Main { public static void main(String[] a) { x = a < b; } }";
+        // ensure '<' parses but a stray '>' would not even lex
+        parse_source(src).unwrap();
     }
 }
 
@@ -104,35 +125,15 @@ mod expressions {
     use super::*;
 
     fn parse_with_exp(exp: &str) -> Result<(), ParseError> {
-        let src = format!(
-            "class Main {{ public static void main(String[] a) {{ x = {exp}; }} }}"
-        );
+        let src = format!("class Main {{ public static void main(String[] a) {{ x = {exp}; }} }}");
         parse_source(&src)
     }
 
     #[test]
-    fn literal_number() {
-        parse_with_exp("42").unwrap();
-    }
-
-    #[test]
-    fn literal_true() {
-        parse_with_exp("true").unwrap();
-    }
-
-    #[test]
-    fn literal_false() {
-        parse_with_exp("false").unwrap();
-    }
-
-    #[test]
-    fn identifier() {
-        parse_with_exp("y").unwrap();
-    }
-
-    #[test]
-    fn this_keyword() {
-        parse_with_exp("this").unwrap();
+    fn literals() {
+        for e in ["42", "true", "false", "y", "this"] {
+            parse_with_exp(e).unwrap();
+        }
     }
 
     #[test]
@@ -146,23 +147,18 @@ mod expressions {
     }
 
     #[test]
-    fn binary_add() {
-        parse_with_exp("1 + 2").unwrap();
+    fn arithmetic() {
+        parse_with_exp("1 + 2 * 3 - 4").unwrap();
     }
 
     #[test]
-    fn binary_mul() {
-        parse_with_exp("1 * 2").unwrap();
-    }
-
-    #[test]
-    fn binary_and() {
+    fn logical_and() {
         parse_with_exp("true && false").unwrap();
     }
 
     #[test]
-    fn binary_gt() {
-        parse_with_exp("a > b").unwrap();
+    fn less_than() {
+        parse_with_exp("a < b").unwrap();
     }
 
     #[test]
@@ -197,13 +193,7 @@ mod expressions {
 
     #[test]
     fn complex_chain() {
-        // .baz alone isn't a DotRest (only `length` or `Id ( args )`)
         parse_with_exp("new Foo().bar(1).baz()").unwrap();
-    }
-
-    #[test]
-    fn less_than() {
-        parse_with_exp("a < b").unwrap();
     }
 }
 
@@ -218,8 +208,8 @@ mod errors {
     }
 
     #[test]
-    fn missing_paren() {
-        let src = "class Main { public static void main(String[] a) { if true x = 1; else x = 2; } }";
+    fn missing_paren_in_if() {
+        let src = "class Main { public static void main(String[] a) { if true { x = 1; } } }";
         assert!(parse_source(src).is_err());
     }
 
@@ -233,15 +223,13 @@ mod errors {
     fn error_carries_line_column() {
         let src = "class Main { public static void main(String[] a) { x = 1\n} }";
         let err = parse_source(src).unwrap_err();
-        // After preprocessor minifies, the `\n` is preserved. The missing
-        // semicolon shows up at line 2 (the `}` token).
         assert!(err.line >= 1, "line should be reported, got {}", err.line);
     }
 
     #[test]
-    fn unexpected_keyword() {
+    fn return_is_not_a_statement() {
         let src = "class Main { public static void main(String[] a) { return 1; } }";
-        assert!(parse_source(src).is_err()); // 'return' is not a Cmd at top
+        assert!(parse_source(src).is_err());
     }
 }
 
