@@ -378,9 +378,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // L_com -> Com L'_com   (treated as zero-or-more for robustness)
+    // L_com -> Com L'_com   (at least one command, per the grammar)
+    // L'_com -> Com L'_com | λ
     fn parse_l_com(&mut self) -> Result<Vec<Stmt>, ParseError> {
-        let mut stmts = Vec::new();
+        // The grammar requires at least one command; `parse_cmd` reports a
+        // precise "expected statement" error when the body is empty.
+        let mut stmts = vec![self.parse_cmd()?];
         while self.at_cmd() {
             stmts.push(self.parse_cmd()?);
         }

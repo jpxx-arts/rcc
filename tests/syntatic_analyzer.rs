@@ -20,9 +20,21 @@ mod minimal_programs {
     use super::*;
 
     #[test]
-    fn empty_main_only() {
+    fn empty_main_is_error() {
+        // L_com requires at least one command, so an empty body is rejected.
         let src = "class Main { public static void main(String[] a) { } }";
-        parse_source(src).unwrap();
+        assert!(parse_source(src).is_err());
+    }
+
+    #[test]
+    fn empty_method_body_is_error() {
+        // A method body must contain at least one command before `return`.
+        let src = "class Main { public static void main(String[] a) { x = 1; } }
+        class Foo {
+            int x;
+            public int get() { return x; }
+        }";
+        assert!(parse_source(src).is_err());
     }
 
     #[test]
@@ -35,29 +47,29 @@ mod minimal_programs {
 
     #[test]
     fn class_with_var_and_method() {
-        let src = "class Main { public static void main(String[] a) { } }
+        let src = "class Main { public static void main(String[] a) { System.out.println(0); } }
         class Foo {
             int x;
-            public int get() { return x; }
+            public int get() { x = 1; return x; }
         }";
         parse_source(src).unwrap();
     }
 
     #[test]
     fn class_with_extends() {
-        let src = "class Main { public static void main(String[] a) { } }
+        let src = "class Main { public static void main(String[] a) { System.out.println(0); } }
         class Foo extends Bar {
             int x;
-            public int get() { return x; }
+            public int get() { x = 1; return x; }
         }";
         parse_source(src).unwrap();
     }
 
     #[test]
     fn method_with_params() {
-        let src = "class Main { public static void main(String[] a) { } }
+        let src = "class Main { public static void main(String[] a) { System.out.println(0); } }
         class Foo {
-            public int add(int p, int q) { return p + q; }
+            public int add(int p, int q) { int s; s = p + q; return s; }
         }";
         parse_source(src).unwrap();
     }

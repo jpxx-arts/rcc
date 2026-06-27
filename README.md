@@ -148,6 +148,9 @@ The grammar in `specs/gramatica-prof.md` is the source of truth. A few
 points worth highlighting:
 
 - `if`/`while` bodies require braces (`{ ... }`); `else` is optional.
+- A command list (`L_com`) must contain at least one command, so `main`
+  and every method body need at least one statement before the closing
+  `}` / `return`. Empty bodies are a syntax error.
 - The only relational operator is `<`.
 - Identifiers follow the C/Java convention (`_` allowed anywhere).
 - A class with no fields **and** no methods is a semantic error.
