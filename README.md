@@ -1,14 +1,15 @@
 # rcc
 
 Compiler frontend for a simplified variant of Java (MiniJava), written in
-Rust. Implements a preprocessor, a lexical analyzer, and a syntactic
-analyzer.
+Rust. Implements a self-contained lexical analyzer, a recursive-descent
+syntactic analyzer that builds an AST and a scoped symbol table, and a
+static semantic analyzer.
 
-Coursework for DIM0164 - Compilers (UFRN, 2026.1).
+Coursework for DIM0164 - Compilers (UFRN, 2026.1), Trabalho 2.
 
 ## Prerequisites
 
-- Rust 1.93 or newer (uses `std::sync::LazyLock`).
+- Rust 1.93 or newer (uses `std::sync::LazyLock` and edition 2024).
 - `cargo` in `PATH`.
 
 Check with:
@@ -35,7 +36,7 @@ The binary is at `target/debug/rcc` or `target/release/rcc`.
 ## Run
 
 The program reads a `.ling` file (MiniJava syntax) and runs the full
-pipeline.
+pipeline: lexical → syntactic (+ symbol table) → semantic analysis.
 
 ```
 cargo run -- path/to/file.ling
@@ -46,25 +47,42 @@ Provided examples:
 ```
 cargo run -- specs/prog-factorial.ling
 cargo run -- specs/prog-bubblesort.ling
+cargo run -- specs/prog-erro-lexico.ling
+cargo run -- specs/prog-erro-semantico.ling
 ```
 
-Standard output, in order:
+### Flags
 
-1. `code is syntactically correct`
-2. The symbol table (index, lexeme, kind, type, line, col).
+| Flag          | Effect                                                          |
+| ------------- | -------------------------------------------------------------- |
+| `--tokens`    | Print the token list produced by the lexer.                    |
+| `--fail-fast` | Stop at the first lexical error (otherwise report all of them).|
+| `--ast`       | Print the abstract syntax tree.                                |
+| `--symbols`   | Print the symbol table after syntactic analysis.               |
+| `--suggest`   | Show correction hints for lexical/syntactic errors.            |
 
-Standard error, on failure:
+Flags may be combined, e.g.:
 
-- `preprocessing error (line N): unclosed block comment`
+```
+cargo run -- --tokens --symbols --ast specs/prog-factorial.ling
+```
+
+### Output and exit codes
+
+On success: `code is syntactically and semantically correct`.
+
+On failure, diagnostics go to standard error with exact `line, column`:
+
+- `lexical error (line N, column C): ...`
 - `syntactic error (line N, column C): expected X, got Y`
-- `Lexical error at line N, column C: Unknown lexeme: 'X'. Did you mean: 'Y'?`
+- `semantic error (line N, column C): ...`
 
-Exit codes: `0` on success, `1` on lexical/syntactic error, `2` on usage
-or file I/O error.
+Exit codes: `0` on success, `1` on a lexical/syntactic/semantic error,
+`2` on usage or file I/O error.
 
 ## Tests
 
-Full suite (integration tests):
+Full suite:
 
 ```
 cargo test
@@ -73,9 +91,9 @@ cargo test
 A single phase:
 
 ```
-cargo test --test preprocessor
 cargo test --test lexical_analyzer
 cargo test --test syntatic_analyzer
+cargo test --test semantic_analyzer
 ```
 
 ## Project structure
@@ -85,26 +103,22 @@ cargo test --test syntatic_analyzer
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs
-│   ├── main.rs                  # CLI driver
-│   ├── preprocessor/mod.rs
-│   ├── lexical_analyzer/mod.rs
-│   └── syntatic_analyzer/mod.rs # Recursive-descent parser
+│   ├── main.rs                  # CLI driver and flag handling
+│   ├── lexical_analyzer/mod.rs  # Self-contained scanner (comments, errors)
+│   ├── syntatic_analyzer/mod.rs # Recursive-descent parser (builds AST)
+│   ├── ast/mod.rs               # AST node types + pretty-printer
+│   ├── symbol_table/mod.rs      # Scoped symbol table (--symbols)
+│   └── semantic_analyzer/mod.rs # Type / class / inheritance checks
 ├── tests/
-│   ├── preprocessor.rs
 │   ├── lexical_analyzer.rs
-│   └── syntatic_analyzer.rs
-├── specs/
-│   ├── gramatica.md                # Original course grammar
-│   ├── gramatica-transformada.md   # Left-recursion removed, factored
-│   ├── prog-bubblesort.ling        # Test program
-│   ├── prog-factorial.ling         # Test program
-│   ├── prog-bubblesort.expected    # Expected preprocessor output
-│   └── prog-factorial.expected     # Expected preprocessor output
-└── docs/
-    ├── relatorio-tecnico.tex    # Technical report (compile with pdflatex)
-    ├── teoria-fase-1.md         # Study notes: lexical
-    ├── teoria-fase-2.md         # Study notes: syntactic
-    └── tasks.md                 # Pending work and future improvements
+│   ├── syntatic_analyzer.rs
+│   └── semantic_analyzer.rs
+└── specs/
+    ├── gramatica-prof.md          # Official grammar (source of truth)
+    ├── prog-factorial.ling        # Valid sample program
+    ├── prog-bubblesort.ling       # Valid sample program
+    ├── prog-erro-lexico.ling      # Sample with lexical errors
+    └── prog-erro-semantico.ling   # Sample with semantic errors
 ```
 
 ## Compilation pipeline
@@ -113,41 +127,27 @@ cargo test --test syntatic_analyzer
 file.ling
    │
    ▼
-preprocessor::preprocess
-   │  (strip comments, normalize whitespace, preserve newlines)
-   ▼
-lexical_analyzer::get_tokens
-   │  (longest-match, EOF, suggestions, symbol table with interning)
+lexical_analyzer::tokenize
+   │  (skip comments/whitespace, longest-match, EOF,
+   │   line/column tracking, interned literal table)
    ▼
 syntatic_analyzer::parse
-   │  (recursive descent)
+   │  (recursive descent per gramatica-prof.md;
+   │   builds the AST and the scoped symbol table)
    ▼
-(SymbolTable, syntactic correctness)
+semantic_analyzer::analyze
+   │  (operator typing, arrays, .length, assignment
+   │   compatibility, classes, inheritance, empty-class rule)
+   ▼
+(AST, SymbolTable, diagnostics)
 ```
 
-## Rebuilding the technical report
+## Language notes
 
-```
-cd docs
-pdflatex relatorio-tecnico.tex
-pdflatex relatorio-tecnico.tex   # second pass for cross-references
-```
+The grammar in `specs/gramatica-prof.md` is the source of truth. A few
+points worth highlighting:
 
-Requires TeX Live with the standard packages `amsmath`, `listings`,
-`xcolor`, `hyperref`, and `geometry`.
-
-## Known deviations from the original grammar
-
-- `specs/gramatica.md` restricts `_` to the trailing position of an
-  identifier via the terminal production `Word -> '_'`. The lexer
-  relaxes this to the C/Java convention (`_` anywhere) to accept the
-  provided test programs (`num_aux`, `aux01`, etc.).
-- The `<` operator was added (not in the original grammar, but used by
-  the test programs).
-- The original grammar admits only a single `Cmd` per body; a `Cmds`
-  non-terminal was introduced for sequences, required by the test
-  programs.
-- `DotRest` restricts the method-call form to `Id ( args )` instead of
-  any `Exp ( args )` (semantically sane, mirrors C/Java).
-
-Details in `specs/gramatica-transformada.md`.
+- `if`/`while` bodies require braces (`{ ... }`); `else` is optional.
+- The only relational operator is `<`.
+- Identifiers follow the C/Java convention (`_` allowed anywhere).
+- A class with no fields **and** no methods is a semantic error.
