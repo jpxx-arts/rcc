@@ -262,3 +262,39 @@ mod e2e_fixtures {
         parse_source(&src).expect("factorial should parse");
     }
 }
+
+mod allow_empty_body_tests {
+    use super::*;
+
+    fn parse_source_with(src: &str, allow_empty_body: bool) -> Result<(), ParseError> {
+        let lex = lexical_analyzer::tokenize(src, false);
+        assert!(
+            lex.errors.is_empty(),
+            "unexpected lexical errors: {:?}",
+            lex.errors
+        );
+        syntatic_analyzer::parse_with(&lex.tokens, allow_empty_body).map(|_| ())
+    }
+
+    #[test]
+    fn empty_body_rejected_by_default() {
+        let src = "class Main { public static void main(String[] a) { } }";
+        assert!(parse_source_with(src, false).is_err());
+    }
+
+    #[test]
+    fn empty_body_accepted_with_flag() {
+        let src = "class Main { public static void main(String[] a) { } }";
+        parse_source_with(src, true).unwrap();
+    }
+
+    #[test]
+    fn empty_method_accepted_with_flag() {
+        let src = "class Main { public static void main(String[] a) { x = 1; } }
+        class Foo {
+            int x;
+            public int get() { return x; }
+        }";
+        parse_source_with(src, true).unwrap();
+    }
+}

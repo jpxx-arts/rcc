@@ -6,11 +6,12 @@
 //! semantic analyzer. The lexer is now self-contained (no preprocessor).
 //!
 //! Flags:
-//!   --tokens      print the token list produced by the lexer
-//!   --fail-fast   stop at the first lexical error (otherwise report all)
-//!   --ast         print the abstract syntax tree
-//!   --symbols     print the symbol table after syntactic analysis
-//!   --suggest     show correction hints for lexical/syntactic errors
+//!   --tokens            print the token list produced by the lexer
+//!   --fail-fast         stop at the first lexical error (otherwise report all)
+//!   --ast               print the abstract syntax tree
+//!   --symbols           print the symbol table after syntactic analysis
+//!   --suggest           show correction hints for lexical/syntactic errors
+//!   --allow-empty-body  relax L_com to be nullable (accept empty bodies)
 
 use std::process::ExitCode;
 
@@ -25,6 +26,7 @@ struct Options {
     ast: bool,
     symbols: bool,
     suggest: bool,
+    allow_empty_body: bool,
 }
 
 fn main() -> ExitCode {
@@ -52,6 +54,7 @@ fn parse_args(args: &[String]) -> Result<Options, ExitCode> {
     let mut ast = false;
     let mut symbols = false;
     let mut suggest = false;
+    let mut allow_empty_body = false;
 
     for arg in &args[1..] {
         match arg.as_str() {
@@ -60,6 +63,7 @@ fn parse_args(args: &[String]) -> Result<Options, ExitCode> {
             "--ast" => ast = true,
             "--symbols" => symbols = true,
             "--suggest" => suggest = true,
+            "--allow-empty-body" => allow_empty_body = true,
             "-h" | "--help" => {
                 print_usage(&args[0]);
                 return Err(ExitCode::SUCCESS);
@@ -87,6 +91,7 @@ fn parse_args(args: &[String]) -> Result<Options, ExitCode> {
             ast,
             symbols,
             suggest,
+            allow_empty_body,
         }),
         None => {
             print_usage(&args[0]);
@@ -97,7 +102,7 @@ fn parse_args(args: &[String]) -> Result<Options, ExitCode> {
 
 fn print_usage(prog: &str) {
     eprintln!(
-        "usage: {prog} [--tokens] [--fail-fast] [--ast] [--symbols] [--suggest] <source-file>"
+        "usage: {prog} [--tokens] [--fail-fast] [--ast] [--symbols] [--suggest] [--allow-empty-body] <source-file>"
     );
 }
 
@@ -115,7 +120,7 @@ fn run(source: &str, opts: &Options) -> ExitCode {
     }
 
     // ---- Syntactic analysis (+ symbol table) ----
-    let (program, symbol_table) = match syntatic_analyzer::parse(&lex.tokens) {
+    let (program, symbol_table) = match syntatic_analyzer::parse_with(&lex.tokens, opts.allow_empty_body) {
         Ok(result) => result,
         Err(err) => {
             report_parse_error(&err, opts.suggest);
