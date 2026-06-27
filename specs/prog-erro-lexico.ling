@@ -1,0 +1,12 @@
+// Deliverable test program: contains LEXICAL errors.
+// - '@' is not a valid character (line 8)
+// - '12abc' is a malformed number/identifier (line 9)
+class Main {
+    public static void main(String[] a) {
+        int x ;
+        int y ;
+        x = 3 @ 4 ;
+        y = 12abc ;
+        System.out.println(x) ;
+    }
+}
