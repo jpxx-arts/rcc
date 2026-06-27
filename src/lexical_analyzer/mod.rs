@@ -1,85 +1,105 @@
-use crate::preprocessor::SourceMap;
-use regex::Regex;
+//! Self-contained lexical analyzer for the WHILE/MiniJava variant.
+//!
+//! Unlike the previous version, this lexer no longer relies on a preprocessor:
+//! it skips whitespace and comments (`// ...` line comments and `/* ... */`
+//! block comments) on its own and reports the exact line/column of any
+//! malformed token.
+//!
+//! `tokenize` returns the token stream, the list of lexical errors collected
+//! along the way, and the interned literal table (identifiers and numbers).
+//! In `fail_fast` mode scanning stops at the first lexical error.
+
 use std::collections::HashMap;
-use std::sync::LazyLock;
 
-const KEYWORDS_PATTERN: &str = "^(class|public|extends|else|int|static|void|main|String|return|boolean|if|while|System|out|println|length|new|true|false|this)$";
-const OPERATIONS_PATTERN: &str = r"^(\&\&|<|>|\+|\-|\*|\!)$";
-const DELIMITERS_PATTERN: &str = r"^(\{|\}|\(|\)|\[|\]|;|,|\.|=)$";
-
-/// Flat list of reserved words, used both for the keyword regex and for
-/// Levenshtein-based suggestion on invalid identifiers.
+/// Reserved words of the language. Used both to classify keyword tokens and to
+/// power Levenshtein-based suggestions for malformed identifiers.
 pub const KEYWORDS_LIST: &[&str] = &[
     "class", "public", "extends", "else", "int", "static", "void", "main", "String", "return",
     "boolean", "if", "while", "System", "out", "println", "length", "new", "true", "false", "this",
 ];
 
-static ID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    // Identifier: starts with alpha, then any of (alpha|digit|_) zero or more
-    // times. The original grammar restricts `_` to the trailing position
-    // (Word's terminal `_` alternative), but the test fixtures rely on the
-    // permissive C/Java-style form (e.g. `num_aux`, `aux01`).
-    Regex::new(r"^[[:alpha:]]([[:digit:]]|[[:alpha:]]|_)*$")
-        .expect("Lexical Analyzer - Id Regex Failed")
-});
-static NUMBER_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("^[[:digit:]]+$").expect("Lexical Analyzer - Number Regex Failed"));
-static KEYWORD_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(KEYWORDS_PATTERN).expect("Lexical Analyzer - Keyword Regex Failed")
-});
-static OPERATION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(OPERATIONS_PATTERN).expect("Lexical Analyzer - Operations Regex Failed")
-});
-static DELIMITER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(DELIMITERS_PATTERN).expect("Lexical Analyzer - Delimiters Regex Failed")
-});
-
-#[derive(Debug, Clone, PartialEq)]
+/// Lexical class of a token. The concrete lexeme lives in [`Token::lexeme`];
+/// keyword/operator/delimiter matching is done by comparing that string.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenClass {
-    ID,
-    NUMBER,
-    KEYWORD(String),
-    OPERATION,
-    DELIMITER,
-    EOF,
-    UNKNOWN,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TokenAttribute {
-    /// Pointer (index) into the SymbolTable. Used by ID and NUMBER.
-    Pointer(usize),
-    /// The lexeme itself, inlined into the token. Used by OPERATION and DELIMITER.
-    Itself(String),
-    /// No attribute (KEYWORD carries the lexeme in its class variant; EOF has nothing).
-    Null,
+    Id,
+    Number,
+    Keyword,
+    Operation,
+    Delimiter,
+    Eof,
 }
 
 #[derive(Debug, Clone)]
 pub struct Token {
-    pub token_name: TokenClass,
-    pub attribute_value: TokenAttribute,
+    pub class: TokenClass,
+    /// Raw text of the token (`"if"`, `"&&"`, `"42"`, `"foo"`). EOF is empty.
+    pub lexeme: String,
+    /// Index into the interned [`SymbolTable`] for `Id`/`Number`; `None` otherwise.
+    pub symbol: Option<usize>,
     pub line: usize,
     pub column: usize,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl Token {
+    pub fn is_keyword(&self, kw: &str) -> bool {
+        self.class == TokenClass::Keyword && self.lexeme == kw
+    }
+    pub fn is_op(&self, op: &str) -> bool {
+        self.class == TokenClass::Operation && self.lexeme == op
+    }
+    pub fn is_delim(&self, d: &str) -> bool {
+        self.class == TokenClass::Delimiter && self.lexeme == d
+    }
+    pub fn is_id(&self) -> bool {
+        self.class == TokenClass::Id
+    }
+    pub fn is_number(&self) -> bool {
+        self.class == TokenClass::Number
+    }
+    pub fn is_eof(&self) -> bool {
+        self.class == TokenClass::Eof
+    }
+
+    /// Human-friendly description used in diagnostics.
+    pub fn describe(&self) -> String {
+        match self.class {
+            TokenClass::Id => format!("identifier '{}'", self.lexeme),
+            TokenClass::Number => format!("number '{}'", self.lexeme),
+            TokenClass::Keyword => format!("keyword '{}'", self.lexeme),
+            TokenClass::Operation => format!("operator '{}'", self.lexeme),
+            TokenClass::Delimiter => format!("'{}'", self.lexeme),
+            TokenClass::Eof => "end of input".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LexError {
+    pub line: usize,
+    pub column: usize,
+    pub msg: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SymbolKind {
     Variable,
     Number,
 }
 
+/// One entry in the interned literal table.
 #[derive(Debug, Clone)]
 pub struct SymbolTableEntry {
     pub lexeme: String,
     pub kind: SymbolKind,
-    /// Filled in by a later phase (semantic analyzer). Lexer leaves None.
-    pub type_info: Option<String>,
     pub first_line: usize,
     pub first_column: usize,
 }
 
-#[derive(Debug)]
+/// Interned table of identifier and number literals seen by the lexer. This is
+/// the classic compiler "string table"; the richer, scoped symbol table built
+/// during parsing lives in [`crate::symbol_table`].
+#[derive(Debug, Default)]
 pub struct SymbolTable {
     pub registers: Vec<SymbolTableEntry>,
     intern_map: HashMap<String, usize>,
@@ -87,15 +107,9 @@ pub struct SymbolTable {
 
 impl SymbolTable {
     fn new() -> Self {
-        SymbolTable {
-            registers: Vec::new(),
-            intern_map: HashMap::new(),
-        }
+        SymbolTable::default()
     }
 
-    /// Interning: returns the existing index for `lexeme` if present, else
-    /// inserts a new entry and returns its index. Two occurrences of the same
-    /// lexeme yield the same pointer.
     fn intern(&mut self, lexeme: &str, kind: SymbolKind, line: usize, column: usize) -> usize {
         if let Some(&idx) = self.intern_map.get(lexeme) {
             return idx;
@@ -104,7 +118,6 @@ impl SymbolTable {
         self.registers.push(SymbolTableEntry {
             lexeme: lexeme.to_string(),
             kind,
-            type_info: None,
             first_line: line,
             first_column: column,
         });
@@ -113,245 +126,256 @@ impl SymbolTable {
     }
 }
 
-#[derive(Debug)]
-pub struct ErrorUnrecognizedLexeme {
-    pub line: usize,
-    pub column: usize,
-    pub msg: String,
+/// Outcome of a lexical pass: the token stream (always terminated by `Eof`),
+/// every lexical error found (empty on success), and the interned table.
+pub struct LexResult {
+    pub tokens: Vec<Token>,
+    pub errors: Vec<LexError>,
+    pub symbols: SymbolTable,
 }
 
-#[derive(Debug, Clone)]
-enum TokenClassTag {
-    Id,
-    Number,
-    Keyword(String),
-    Operation,
-    Delimiter,
-    Unknown,
+struct Scanner {
+    chars: Vec<char>,
+    pos: usize,
+    line: usize,
+    column: usize,
 }
 
-pub fn get_tokens(src: &str) -> (Vec<Token>, SymbolTable) {
-    get_tokens_with_map(src, None)
+impl Scanner {
+    fn new(src: &str) -> Self {
+        Scanner {
+            chars: src.chars().collect(),
+            pos: 0,
+            line: 1,
+            column: 1,
+        }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.pos).copied()
+    }
+
+    fn peek2(&self) -> Option<char> {
+        self.chars.get(self.pos + 1).copied()
+    }
+
+    /// Advance one character, maintaining line/column counters.
+    fn bump(&mut self) -> Option<char> {
+        let c = self.chars.get(self.pos).copied()?;
+        self.pos += 1;
+        if c == '\n' {
+            self.line += 1;
+            self.column = 1;
+        } else {
+            self.column += 1;
+        }
+        Some(c)
+    }
 }
 
-pub fn get_tokens_with_map(src: &str, map: Option<&SourceMap>) -> (Vec<Token>, SymbolTable) {
+/// Tokenize `src`. When `fail_fast` is true, scanning stops at the first
+/// lexical error; otherwise it recovers and reports every error.
+pub fn tokenize(src: &str, fail_fast: bool) -> LexResult {
+    let mut sc = Scanner::new(src);
     let mut tokens = Vec::new();
-    let mut symbol_table = SymbolTable::new();
+    let mut errors = Vec::new();
+    let mut symbols = SymbolTable::new();
 
-    let mut line = 1usize;
-    let mut column = 1usize;
+    'outer: loop {
+        // Skip whitespace and comments between tokens.
+        loop {
+            match sc.peek() {
+                Some(c) if c.is_whitespace() => {
+                    sc.bump();
+                }
+                Some('/') if sc.peek2() == Some('/') => {
+                    // Line comment: consume up to (not including) the newline.
+                    while let Some(c) = sc.peek() {
+                        if c == '\n' {
+                            break;
+                        }
+                        sc.bump();
+                    }
+                }
+                Some('/') if sc.peek2() == Some('*') => {
+                    let start_line = sc.line;
+                    let start_col = sc.column;
+                    sc.bump(); // '/'
+                    sc.bump(); // '*'
+                    let mut closed = false;
+                    while let Some(c) = sc.bump() {
+                        if c == '*' && sc.peek() == Some('/') {
+                            sc.bump(); // '/'
+                            closed = true;
+                            break;
+                        }
+                    }
+                    if !closed {
+                        errors.push(LexError {
+                            line: start_line,
+                            column: start_col,
+                            msg: "unclosed block comment".to_string(),
+                        });
+                        if fail_fast {
+                            break 'outer;
+                        }
+                    }
+                }
+                _ => break,
+            }
+        }
 
-    let mut cursor = 0;
-    while cursor < src.len() {
-        match get_token(src, cursor, map, &mut symbol_table, &mut line, &mut column) {
-            Ok((Some(token), consumed)) => {
-                tokens.push(token);
-                cursor += consumed;
+        let Some(c) = sc.peek() else { break };
+        let start_line = sc.line;
+        let start_column = sc.column;
+
+        if c.is_alphabetic() {
+            let lexeme = scan_word(&mut sc);
+            let class = if KEYWORDS_LIST.contains(&lexeme.as_str()) {
+                TokenClass::Keyword
+            } else {
+                TokenClass::Id
+            };
+            let symbol = if class == TokenClass::Id {
+                Some(symbols.intern(&lexeme, SymbolKind::Variable, start_line, start_column))
+            } else {
+                None
+            };
+            tokens.push(Token {
+                class,
+                lexeme,
+                symbol,
+                line: start_line,
+                column: start_column,
+            });
+            continue;
+        }
+
+        if c.is_ascii_digit() {
+            let lexeme = scan_number(&mut sc);
+            // A number immediately followed by a letter is a malformed token
+            // (e.g. `12ab`). Report it but consume the trailing word so we
+            // don't spam an error per character.
+            if matches!(sc.peek(), Some(ch) if ch.is_alphabetic() || ch == '_') {
+                let bad_tail = scan_word(&mut sc);
+                errors.push(LexError {
+                    line: start_line,
+                    column: start_column,
+                    msg: format!("malformed number/identifier '{lexeme}{bad_tail}'"),
+                });
+                if fail_fast {
+                    break;
+                }
+                continue;
             }
-            Ok((None, consumed)) => {
-                // Only whitespace/newlines were skipped; no token produced.
-                cursor += consumed;
-            }
-            Err(err) => {
-                eprintln!(
-                    "Lexical error at line {}, column {}: {}",
-                    err.line, err.column, err.msg
-                );
-                // Skip the offending char and continue so the parser can see EOF.
-                cursor += 1;
-            }
+            let symbol = symbols.intern(&lexeme, SymbolKind::Number, start_line, start_column);
+            tokens.push(Token {
+                class: TokenClass::Number,
+                lexeme,
+                symbol: Some(symbol),
+                line: start_line,
+                column: start_column,
+            });
+            continue;
+        }
+
+        // Operators and delimiters.
+        if let Some((lexeme, class)) = scan_symbolic(&mut sc) {
+            tokens.push(Token {
+                class,
+                lexeme,
+                symbol: None,
+                line: start_line,
+                column: start_column,
+            });
+            continue;
+        }
+
+        // Nothing matched: malformed lexeme. Consume the single offending char.
+        let bad = sc.bump().unwrap();
+        errors.push(LexError {
+            line: start_line,
+            column: start_column,
+            msg: format!("unrecognized character '{bad}'"),
+        });
+        if fail_fast {
+            break;
         }
     }
 
     tokens.push(Token {
-        token_name: TokenClass::EOF,
-        attribute_value: TokenAttribute::Null,
-        line,
-        column,
+        class: TokenClass::Eof,
+        lexeme: String::new(),
+        symbol: None,
+        line: sc.line,
+        column: sc.column,
     });
 
-    (tokens, symbol_table)
+    LexResult {
+        tokens,
+        errors,
+        symbols,
+    }
 }
 
-/// Consume one token from `src` starting at `cursor`.
-///
-/// Returns `(Some(token), consumed)` if a token was produced, or
-/// `(None, consumed)` if only whitespace/newlines were skipped (no token).
-fn get_token(
-    full_src: &str,
-    cursor: usize,
-    map: Option<&SourceMap>,
-    symbol_table: &mut SymbolTable,
-    line: &mut usize,
-    column: &mut usize,
-) -> Result<(Option<Token>, usize), ErrorUnrecognizedLexeme> {
-    let src = &full_src[cursor..];
-    let mut lexeme = String::new();
-    let mut consumed: usize = 0;
-    let mut token_tag = TokenClassTag::Unknown;
-
-    // Initial position
-    if let Some(m) = map {
-        let pos = m.get(cursor);
-        *line = pos.0;
-        *column = pos.1;
+/// Identifier/word: `[A-Za-z][A-Za-z0-9_]*`.
+fn scan_word(sc: &mut Scanner) -> String {
+    let mut s = String::new();
+    while let Some(c) = sc.peek() {
+        if c.is_alphanumeric() || c == '_' {
+            s.push(c);
+            sc.bump();
+        } else {
+            break;
+        }
     }
-    let mut start_line = *line;
-    let mut start_column = *column;
+    s
+}
 
-    for c in src.chars() {
-        let char_len = c.len_utf8();
-
-        match c {
-            '\n' => {
-                if lexeme.is_empty() {
-                    consumed += char_len;
-                    if let Some(m) = map {
-                        let pos = m.get(cursor + consumed);
-                        *line = pos.0;
-                        *column = pos.1;
-                    } else {
-                        *line += 1;
-                        *column = 1;
-                    }
-                    start_line = *line;
-                    start_column = *column;
-                    continue;
-                }
-                let token =
-                    build_token(&lexeme, &token_tag, symbol_table, start_line, start_column)?;
-                return Ok((Some(token), consumed));
-            }
-            ' ' | '\t' | '\r' => {
-                if lexeme.is_empty() {
-                    consumed += char_len;
-                    if let Some(m) = map {
-                        let pos = m.get(cursor + consumed);
-                        *line = pos.0;
-                        *column = pos.1;
-                    } else {
-                        *column += 1;
-                    }
-                    start_line = *line;
-                    start_column = *column;
-                    continue;
-                }
-                let token =
-                    build_token(&lexeme, &token_tag, symbol_table, start_line, start_column)?;
-                return Ok((Some(token), consumed));
-            }
-            _ => {}
-        }
-
-        lexeme.push(c);
-        consumed += char_len;
-
-        // Update line/column for the NEXT character
-        if let Some(m) = map {
-            let pos = m.get(cursor + consumed);
-            *line = pos.0;
-            *column = pos.1;
+/// Number literal: one or more digits.
+fn scan_number(sc: &mut Scanner) -> String {
+    let mut s = String::new();
+    while let Some(c) = sc.peek() {
+        if c.is_ascii_digit() {
+            s.push(c);
+            sc.bump();
         } else {
-            *column += 1;
+            break;
         }
+    }
+    s
+}
 
-        if NUMBER_REGEX.is_match(&lexeme) {
-            token_tag = TokenClassTag::Number;
-        } else if KEYWORD_REGEX.is_match(&lexeme) {
-            token_tag = TokenClassTag::Keyword(lexeme.clone());
-        } else if ID_REGEX.is_match(&lexeme) {
-            token_tag = TokenClassTag::Id;
-        } else if DELIMITER_REGEX.is_match(&lexeme) {
-            token_tag = TokenClassTag::Delimiter;
-        } else if OPERATION_REGEX.is_match(&lexeme) {
-            token_tag = TokenClassTag::Operation;
-        } else if lexeme == "&" {
-            // Special case: `&` alone matches nothing, but `&&` does. Keep
-            // extending so the next `&` completes the operator.
-            continue;
-        } else {
-            // The current char broke every classification. Roll it back and
-            // emit whatever we had before.
-            lexeme.pop();
-            consumed -= char_len;
-            if let Some(m) = map {
-                let pos = m.get(cursor + consumed);
-                *line = pos.0;
-                *column = pos.1;
+/// Operator or delimiter starting at the cursor. Returns `None` if the current
+/// character begins no valid symbolic token (so the caller can report it).
+fn scan_symbolic(sc: &mut Scanner) -> Option<(String, TokenClass)> {
+    let c = sc.peek()?;
+    match c {
+        '&' => {
+            if sc.peek2() == Some('&') {
+                sc.bump();
+                sc.bump();
+                Some(("&&".to_string(), TokenClass::Operation))
             } else {
-                *column -= 1;
+                // Lone '&' is not a valid token; let the caller report it.
+                None
             }
-            let token = build_token(&lexeme, &token_tag, symbol_table, start_line, start_column)?;
-            return Ok((Some(token), consumed));
         }
-    }
-
-    // End of input: emit whatever we accumulated, if anything.
-    if matches!(token_tag, TokenClassTag::Unknown) && lexeme.is_empty() {
-        return Ok((None, consumed));
-    }
-    let token = build_token(&lexeme, &token_tag, symbol_table, start_line, start_column)?;
-    Ok((Some(token), consumed))
-}
-
-fn build_token(
-    lexeme: &str,
-    tag: &TokenClassTag,
-    symbol_table: &mut SymbolTable,
-    line: usize,
-    column: usize,
-) -> Result<Token, ErrorUnrecognizedLexeme> {
-    match tag {
-        TokenClassTag::Id => {
-            let ptr = symbol_table.intern(lexeme, SymbolKind::Variable, line, column);
-            Ok(Token {
-                token_name: TokenClass::ID,
-                attribute_value: TokenAttribute::Pointer(ptr),
-                line,
-                column,
-            })
+        '<' | '+' | '-' | '*' | '!' => {
+            sc.bump();
+            Some((c.to_string(), TokenClass::Operation))
         }
-        TokenClassTag::Number => {
-            let ptr = symbol_table.intern(lexeme, SymbolKind::Number, line, column);
-            Ok(Token {
-                token_name: TokenClass::NUMBER,
-                attribute_value: TokenAttribute::Pointer(ptr),
-                line,
-                column,
-            })
+        '{' | '}' | '(' | ')' | '[' | ']' | ';' | ',' | '.' | '=' => {
+            sc.bump();
+            Some((c.to_string(), TokenClass::Delimiter))
         }
-        TokenClassTag::Keyword(kw) => Ok(Token {
-            token_name: TokenClass::KEYWORD(kw.clone()),
-            attribute_value: TokenAttribute::Null,
-            line,
-            column,
-        }),
-        TokenClassTag::Operation => Ok(Token {
-            token_name: TokenClass::OPERATION,
-            attribute_value: TokenAttribute::Itself(lexeme.to_string()),
-            line,
-            column,
-        }),
-        TokenClassTag::Delimiter => Ok(Token {
-            token_name: TokenClass::DELIMITER,
-            attribute_value: TokenAttribute::Itself(lexeme.to_string()),
-            line,
-            column,
-        }),
-        TokenClassTag::Unknown => {
-            let suggestion = suggest_keyword(lexeme);
-            let msg = match suggestion {
-                Some(s) => format!("Unknown lexeme: '{lexeme}'. Did you mean: '{s}'?"),
-                None => format!("Unknown lexeme: '{lexeme}'"),
-            };
-            Err(ErrorUnrecognizedLexeme { line, column, msg })
-        }
+        _ => None,
     }
 }
 
 /// If `lexeme` is within edit distance ≤ 2 of a reserved keyword, return that
-/// keyword as a suggestion. Used when reporting unrecognized identifiers.
-fn suggest_keyword(lexeme: &str) -> Option<String> {
+/// keyword. Used to enrich diagnostics with a "did you mean" suggestion.
+pub fn suggest_keyword(lexeme: &str) -> Option<String> {
     if lexeme.is_empty() {
         return None;
     }
