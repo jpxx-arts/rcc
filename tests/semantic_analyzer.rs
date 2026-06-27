@@ -24,9 +24,11 @@ fn assert_err(src: &str, needle: &str) {
     );
 }
 
-/// Wrap a class body in a program with a trivial main.
+/// Wrap a class body in a program with a trivial (but non-empty) main.
 fn program(classes: &str) -> String {
-    format!("class Main {{ public static void main(String[] a) {{ }} }}\n{classes}")
+    format!(
+        "class Main {{ public static void main(String[] a) {{ System.out.println(0) ; }} }}\n{classes}"
+    )
 }
 
 #[test]
@@ -148,6 +150,8 @@ fn undefined_variable() {
         &program(
             "class C {
                 public int f() {
+                    int q ;
+                    q = 0 ;
                     return zzz ;
                 }
             }",
@@ -162,7 +166,6 @@ fn inheritance_field_access() {
     assert_ok(&program(
         "class A {
             int v ;
-            public int getv() { return v ; }
         }
         class B extends A {
             public int f() {
@@ -178,10 +181,10 @@ fn inheritance_field_access() {
 fn subclass_assignable_to_parent() {
     assert_ok(&program(
         "class A {
-            public int f() { return 0 ; }
+            public int f() { int z ; z = 0 ; return z ; }
         }
         class B extends A {
-            public int g() { return 1 ; }
+            public int g() { int z ; z = 1 ; return z ; }
         }
         class C {
             public int use() {
@@ -198,10 +201,10 @@ fn override_signature_mismatch() {
     assert_err(
         &program(
             "class A {
-                public int f(int x) { return x ; }
+                public int f(int x) { int z ; z = x ; return z ; }
             }
             class B extends A {
-                public boolean f(int x) { return true ; }
+                public boolean f(int x) { boolean z ; z = true ; return z ; }
             }",
         ),
         "incompatible signature",
@@ -213,8 +216,8 @@ fn method_call_wrong_arg_count() {
     assert_err(
         &program(
             "class C {
-                public int f(int x) { return x ; }
-                public int g() { return this.f() ; }
+                public int f(int x) { int z ; z = x ; return z ; }
+                public int g() { int q ; q = 0 ; return this.f() ; }
             }",
         ),
         "expects 1 argument",
@@ -226,8 +229,8 @@ fn method_call_arg_type_mismatch() {
     assert_err(
         &program(
             "class C {
-                public int f(int x) { return x ; }
-                public int g() { return this.f(true) ; }
+                public int f(int x) { int z ; z = x ; return z ; }
+                public int g() { int q ; q = 0 ; return this.f(true) ; }
             }",
         ),
         "not compatible with parameter type",
@@ -240,7 +243,6 @@ fn extends_unknown_class() {
         &program(
             "class B extends Ghost {
                 int v ;
-                public int f() { return v ; }
             }",
         ),
         "extends unknown class",
