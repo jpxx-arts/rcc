@@ -26,6 +26,10 @@ pub struct Parser<'a> {
     symbols: SymbolTable,
     /// Current scope path, joined with `::` (e.g. `["global", "BBS", "Sort"]`).
     scope: Vec<String>,
+    /// When true, `L_com` is treated as nullable (zero or more commands),
+    /// relaxing the official grammar so empty method/if/while/else bodies are
+    /// accepted. Default (`false`) keeps the strict `L_com -> Com L'_com`.
+    allow_empty_body: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -35,7 +39,14 @@ impl<'a> Parser<'a> {
             cursor: 0,
             symbols: SymbolTable::new(),
             scope: vec!["global".to_string()],
+            allow_empty_body: false,
         }
+    }
+
+    /// Builder: opt into the lax, nullable-`L_com` mode.
+    pub fn allow_empty_body(mut self, yes: bool) -> Self {
+        self.allow_empty_body = yes;
+        self
     }
 
     /// Parse the whole program, returning the AST and the populated symbol
@@ -381,9 +392,14 @@ impl<'a> Parser<'a> {
     // L_com -> Com L'_com   (at least one command, per the grammar)
     // L'_com -> Com L'_com | λ
     fn parse_l_com(&mut self) -> Result<Vec<Stmt>, ParseError> {
-        // The grammar requires at least one command; `parse_cmd` reports a
-        // precise "expected statement" error when the body is empty.
-        let mut stmts = vec![self.parse_cmd()?];
+        let mut stmts = Vec::new();
+        // Strict mode: the grammar requires at least one command, so we parse a
+        // mandatory first `Com` (`parse_cmd` reports a precise "expected
+        // statement" error when the body is empty). In `allow_empty_body` mode
+        // we skip that requirement, making `L_com` nullable.
+        if !self.allow_empty_body {
+            stmts.push(self.parse_cmd()?);
+        }
         while self.at_cmd() {
             stmts.push(self.parse_cmd()?);
         }
@@ -759,7 +775,18 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// Convenience: parse a token slice into an AST and symbol table.
+/// Convenience: parse a token slice into an AST and symbol table, using the
+/// strict official grammar (`L_com` requires at least one command).
 pub fn parse(tokens: &[Token]) -> Result<(Program, SymbolTable), ParseError> {
     Parser::new(tokens).parse()
+}
+
+/// Like [`parse`], but when `allow_empty_body` is true `L_com` is treated as
+/// nullable, so empty method/if/while/else bodies are accepted. With
+/// `allow_empty_body == false` the behavior is identical to [`parse`].
+pub fn parse_with(
+    tokens: &[Token],
+    allow_empty_body: bool,
+) -> Result<(Program, SymbolTable), ParseError> {
+    Parser::new(tokens).allow_empty_body(allow_empty_body).parse()
 }
