@@ -788,5 +788,7 @@ pub fn parse_with(
     tokens: &[Token],
     allow_empty_body: bool,
 ) -> Result<(Program, SymbolTable), ParseError> {
-    Parser::new(tokens).allow_empty_body(allow_empty_body).parse()
+    Parser::new(tokens)
+        .allow_empty_body(allow_empty_body)
+        .parse()
 }

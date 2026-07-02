@@ -120,13 +120,14 @@ fn run(source: &str, opts: &Options) -> ExitCode {
     }
 
     // ---- Syntactic analysis (+ symbol table) ----
-    let (program, symbol_table) = match syntatic_analyzer::parse_with(&lex.tokens, opts.allow_empty_body) {
-        Ok(result) => result,
-        Err(err) => {
-            report_parse_error(&err, opts.suggest);
-            return ExitCode::FAILURE;
-        }
-    };
+    let (program, symbol_table) =
+        match syntatic_analyzer::parse_with(&lex.tokens, opts.allow_empty_body) {
+            Ok(result) => result,
+            Err(err) => {
+                report_parse_error(&err, opts.suggest);
+                return ExitCode::FAILURE;
+            }
+        };
 
     if opts.symbols {
         print!("\n{}", symbol_table.render());
