@@ -199,5 +199,7 @@ points worth highlighting:
   and every method body need at least one statement before the closing
   `}` / `return`. Empty bodies are a syntax error.
 - The only relational operator is `<`.
-- Identifiers follow the C/Java convention (`_` allowed anywhere).
+- Identifiers start with an ASCII letter (`a-z`, `A-Z`) and may continue
+  with ASCII letters, digits and `_`. Non-ASCII letters are lexical
+  errors, per the grammar's `Letter` rule.
 - A class with no fields **and** no methods is a semantic error.

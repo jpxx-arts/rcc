@@ -197,6 +197,60 @@ mod errors {
         assert_eq!(result.errors.len(), 1);
         assert!(result.errors[0].msg.contains("malformed"));
     }
+
+    #[test]
+    fn non_ascii_letter_is_rejected() {
+        // Grammar restricts Letter to a-z / A-Z; `é` must not extend the word.
+        let result = lexical_analyzer::tokenize("café", false);
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].msg.contains("unrecognized character 'é'"));
+        assert_eq!(result.tokens[0].lexeme, "caf");
+    }
+
+    #[test]
+    fn word_cannot_start_with_non_ascii_letter() {
+        let result = lexical_analyzer::tokenize("Ção", false);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.msg.contains("unrecognized character 'Ç'")),
+            "got {:?}",
+            result.errors
+        );
+    }
+}
+
+mod suggestions {
+    use super::*;
+
+    #[test]
+    fn unclosed_comment_suggests_closing() {
+        let result = lexical_analyzer::tokenize("a /* never closed", false);
+        let hint = result.errors[0].suggestion.as_deref().unwrap();
+        assert!(hint.contains("*/"), "got {hint:?}");
+    }
+
+    #[test]
+    fn lone_ampersand_suggests_logical_and() {
+        let result = lexical_analyzer::tokenize("a & b", false);
+        let hint = result.errors[0].suggestion.as_deref().unwrap();
+        assert!(hint.contains("&&"), "got {hint:?}");
+    }
+
+    #[test]
+    fn malformed_number_with_keyword_tail_suggests_separation() {
+        let result = lexical_analyzer::tokenize("10whle", false);
+        let hint = result.errors[0].suggestion.as_deref().unwrap();
+        assert!(hint.contains("'10 while'"), "got {hint:?}");
+    }
+
+    #[test]
+    fn leading_underscore_explains_identifier_rule() {
+        let result = lexical_analyzer::tokenize("_foo", false);
+        let hint = result.errors[0].suggestion.as_deref().unwrap();
+        assert!(hint.contains("start with a letter"), "got {hint:?}");
+    }
 }
 
 mod interning {

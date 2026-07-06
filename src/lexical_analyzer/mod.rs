@@ -79,6 +79,8 @@ pub struct LexError {
     pub line: usize,
     pub column: usize,
     pub msg: String,
+    /// Optional fix hint surfaced by the `--suggest` flag.
+    pub suggestion: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +217,7 @@ pub fn tokenize(src: &str, fail_fast: bool) -> LexResult {
                             line: start_line,
                             column: start_col,
                             msg: "unclosed block comment".to_string(),
+                            suggestion: Some("close the comment with '*/'".to_string()),
                         });
                         if fail_fast {
                             break 'outer;
@@ -229,7 +232,7 @@ pub fn tokenize(src: &str, fail_fast: bool) -> LexResult {
         let start_line = sc.line;
         let start_column = sc.column;
 
-        if c.is_alphabetic() {
+        if c.is_ascii_alphabetic() {
             let lexeme = scan_word(&mut sc);
             let class = if KEYWORDS_LIST.contains(&lexeme.as_str()) {
                 TokenClass::Keyword
@@ -256,12 +259,23 @@ pub fn tokenize(src: &str, fail_fast: bool) -> LexResult {
             // A number immediately followed by a letter is a malformed token
             // (e.g. `12ab`). Report it but consume the trailing word so we
             // don't spam an error per character.
-            if matches!(sc.peek(), Some(ch) if ch.is_alphabetic() || ch == '_') {
+            if matches!(sc.peek(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_') {
                 let bad_tail = scan_word(&mut sc);
+                // If the trailing word looks like a mistyped keyword, the user
+                // probably just forgot the separator (`10whle` -> `10 while`).
+                let suggestion = match suggest_keyword(&bad_tail) {
+                    Some(kw) => format!(
+                        "identifiers cannot start with a digit; did you mean '{lexeme} {kw}'?"
+                    ),
+                    None => format!(
+                        "identifiers cannot start with a digit; separate '{lexeme}' from '{bad_tail}'"
+                    ),
+                };
                 errors.push(LexError {
                     line: start_line,
                     column: start_column,
                     msg: format!("malformed number/identifier '{lexeme}{bad_tail}'"),
+                    suggestion: Some(suggestion),
                 });
                 if fail_fast {
                     break;
@@ -293,10 +307,19 @@ pub fn tokenize(src: &str, fail_fast: bool) -> LexResult {
 
         // Nothing matched: malformed lexeme. Consume the single offending char.
         let bad = sc.bump().unwrap();
+        let suggestion = match bad {
+            '&' => Some("use '&&' for logical AND".to_string()),
+            '_' => Some("identifiers must start with a letter (a-z, A-Z)".to_string()),
+            c if c.is_alphabetic() => {
+                Some("identifiers only allow ASCII letters (a-z, A-Z)".to_string())
+            }
+            _ => Some("remove this character".to_string()),
+        };
         errors.push(LexError {
             line: start_line,
             column: start_column,
             msg: format!("unrecognized character '{bad}'"),
+            suggestion,
         });
         if fail_fast {
             break;
@@ -318,11 +341,12 @@ pub fn tokenize(src: &str, fail_fast: bool) -> LexResult {
     }
 }
 
-/// Identifier/word: `[A-Za-z][A-Za-z0-9_]*`.
+/// Identifier/word: `[A-Za-z][A-Za-z0-9_]*` (ASCII only, per the grammar's
+/// `Letter -> 'a' | ... | 'z' | 'A' | ... | 'Z'`).
 fn scan_word(sc: &mut Scanner) -> String {
     let mut s = String::new();
     while let Some(c) = sc.peek() {
-        if c.is_alphanumeric() || c == '_' {
+        if c.is_ascii_alphanumeric() || c == '_' {
             s.push(c);
             sc.bump();
         } else {
