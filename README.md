@@ -1,11 +1,12 @@
 # rcc
 
-Compiler frontend for a simplified variant of Java (MiniJava), written in
-Rust. Implements a self-contained lexical analyzer, a recursive-descent
-syntactic analyzer that builds an AST and a scoped symbol table, and a
-static semantic analyzer.
+Compiler for a simplified variant of Java (MiniJava), written in Rust.
+Implements a self-contained lexical analyzer, a recursive-descent
+syntactic analyzer that builds an AST and a scoped symbol table, a
+static semantic analyzer, and a three-address code (3AC) backend that
+generates intermediate code from the AST.
 
-Coursework for DIM0164 - Compilers (UFRN, 2026.1), Trabalho 2.
+Coursework for DIM0164 - Compilers (UFRN, 2026.1), Trabalhos 2 and 3.
 
 ## Prerequisites
 
@@ -60,6 +61,11 @@ cargo run -- specs/prog-erro-semantico.ling
 | `--ast`       | Print the abstract syntax tree.                                |
 | `--symbols`   | Print the symbol table after syntactic analysis.               |
 | `--suggest`   | Show correction hints for lexical/syntactic errors.            |
+| `--tac`       | Print the three-address intermediate code (after semantics).   |
+
+When `--tac` and `--symbols` are combined, the symbol table is printed
+after code generation, so the compiler-created temporaries (`t0`, `t1`,
+...) and labels (`L0`, `L1`, ...) appear as table entries.
 
 Flags may be combined, e.g.:
 
@@ -94,6 +100,7 @@ A single phase:
 cargo test --test lexical_analyzer
 cargo test --test syntatic_analyzer
 cargo test --test semantic_analyzer
+cargo test --test tac
 ```
 
 ## Project structure
@@ -107,12 +114,14 @@ cargo test --test semantic_analyzer
 │   ├── lexical_analyzer/mod.rs  # Self-contained scanner (comments, errors)
 │   ├── syntatic_analyzer/mod.rs # Recursive-descent parser (builds AST)
 │   ├── ast/mod.rs               # AST node types + pretty-printer
-│   ├── symbol_table/mod.rs      # Scoped symbol table (--symbols)
-│   └── semantic_analyzer/mod.rs # Type / class / inheritance checks
+│   ├── symbol_table/mod.rs      # Scoped symbol table + temps/labels (--symbols)
+│   ├── semantic_analyzer/mod.rs # Type / class / inheritance checks
+│   └── tac/mod.rs               # 3AC instructions + code generator (--tac)
 ├── tests/
 │   ├── lexical_analyzer.rs
 │   ├── syntatic_analyzer.rs
-│   └── semantic_analyzer.rs
+│   ├── semantic_analyzer.rs
+│   └── tac.rs
 └── specs/
     ├── gramatica-prof.md          # Official grammar (source of truth)
     ├── prog-factorial.ling        # Valid sample program
@@ -139,8 +148,46 @@ semantic_analyzer::analyze
    │  (operator typing, arrays, .length, assignment
    │   compatibility, classes, inheritance, empty-class rule)
    ▼
-(AST, SymbolTable, diagnostics)
+tac::generate
+   │  (bottom-up AST walk; emits 3AC instruction lists,
+   │   creating temporaries/labels in the symbol table)
+   ▼
+(AST, SymbolTable, 3AC, diagnostics)
 ```
+
+## Intermediate code (3AC)
+
+Each instruction is an opcode plus up to three references into the
+symbol table (result and two operands), chained in lists with helpers
+for creation, concatenation and printing (`tac::Instr`, `tac::concat`,
+`tac::render`). The generator (`tac::generate`) walks the AST
+recursively: children first, then the current node's instructions are
+appended to the concatenated child fragments.
+
+Example (`cargo run -- --tac specs/prog-factorial.ling` style output):
+
+```
+begin Fac.ComputeFac
+  t2 = num < 1
+  ifFalse t2 goto L0
+  num_aux = 1
+  goto L1
+L0:
+  t3 = num - 1
+  param this
+  param t3
+  t4 = call Fac.ComputeFac
+  t5 = num * t4
+  num_aux = t5
+L1:
+  return num_aux
+end Fac.ComputeFac
+```
+
+Method calls pass the receiver as the first `param`; the call target is
+resolved statically through the inheritance chain when the receiver's
+class is known (`new C()`, `this`), and kept as the method name
+otherwise (dynamic dispatch).
 
 ## Language notes
 
