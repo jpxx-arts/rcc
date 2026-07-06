@@ -12,12 +12,14 @@
 //!   --symbols           print the symbol table after syntactic analysis
 //!   --suggest           show correction hints for lexical/syntactic errors
 //!   --allow-empty-body  relax L_com to be nullable (accept empty bodies)
+//!   --tac               print the three-address intermediate code
 
 use std::process::ExitCode;
 
 use rcc::lexical_analyzer::{self, LexError, Token, TokenClass};
 use rcc::semantic_analyzer;
 use rcc::syntatic_analyzer::{self, ParseError};
+use rcc::tac;
 
 struct Options {
     path: String,
@@ -27,6 +29,7 @@ struct Options {
     symbols: bool,
     suggest: bool,
     allow_empty_body: bool,
+    tac: bool,
 }
 
 fn main() -> ExitCode {
@@ -55,6 +58,7 @@ fn parse_args(args: &[String]) -> Result<Options, ExitCode> {
     let mut symbols = false;
     let mut suggest = false;
     let mut allow_empty_body = false;
+    let mut tac = false;
 
     for arg in &args[1..] {
         match arg.as_str() {
@@ -64,6 +68,7 @@ fn parse_args(args: &[String]) -> Result<Options, ExitCode> {
             "--symbols" => symbols = true,
             "--suggest" => suggest = true,
             "--allow-empty-body" => allow_empty_body = true,
+            "--tac" => tac = true,
             "-h" | "--help" => {
                 print_usage(&args[0]);
                 return Err(ExitCode::SUCCESS);
@@ -92,6 +97,7 @@ fn parse_args(args: &[String]) -> Result<Options, ExitCode> {
             symbols,
             suggest,
             allow_empty_body,
+            tac,
         }),
         None => {
             print_usage(&args[0]);
@@ -102,7 +108,7 @@ fn parse_args(args: &[String]) -> Result<Options, ExitCode> {
 
 fn print_usage(prog: &str) {
     eprintln!(
-        "usage: {prog} [--tokens] [--fail-fast] [--ast] [--symbols] [--suggest] [--allow-empty-body] <source-file>"
+        "usage: {prog} [--tokens] [--fail-fast] [--ast] [--symbols] [--suggest] [--allow-empty-body] [--tac] <source-file>"
     );
 }
 
@@ -120,7 +126,7 @@ fn run(source: &str, opts: &Options) -> ExitCode {
     }
 
     // ---- Syntactic analysis (+ symbol table) ----
-    let (program, symbol_table) =
+    let (program, mut symbol_table) =
         match syntatic_analyzer::parse_with(&lex.tokens, opts.allow_empty_body) {
             Ok(result) => result,
             Err(err) => {
@@ -129,8 +135,12 @@ fn run(source: &str, opts: &Options) -> ExitCode {
             }
         };
 
-    if opts.symbols {
+    // With --tac the symbol table is printed after code generation instead,
+    // so the compiler-created temporaries and labels appear in it.
+    let mut symbols_pending = opts.symbols;
+    if opts.symbols && !opts.tac {
         print!("\n{}", symbol_table.render());
+        symbols_pending = false;
     }
     if opts.ast {
         print!("\n{}", program.pretty());
@@ -139,6 +149,9 @@ fn run(source: &str, opts: &Options) -> ExitCode {
     // ---- Semantic analysis ----
     let sem_errors = semantic_analyzer::analyze(&program);
     if !sem_errors.is_empty() {
+        if symbols_pending {
+            print!("\n{}", symbol_table.render());
+        }
         eprintln!("\n{} semantic error(s) found:", sem_errors.len());
         for e in &sem_errors {
             eprintln!(
@@ -150,6 +163,16 @@ fn run(source: &str, opts: &Options) -> ExitCode {
     }
 
     println!("\ncode is syntactically and semantically correct");
+
+    // ---- Intermediate code generation (3AC) ----
+    if opts.tac {
+        let code = tac::generate(&program, &mut symbol_table);
+        if symbols_pending {
+            print!("\n{}", symbol_table.render());
+        }
+        print!("\n{}", tac::render(&code, &symbol_table));
+    }
+
     ExitCode::SUCCESS
 }
 
