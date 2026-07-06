@@ -6,7 +6,7 @@ syntactic analyzer that builds an AST and a scoped symbol table, a
 static semantic analyzer, and a three-address code (3AC) backend that
 generates intermediate code from the AST.
 
-Coursework for DIM0164 - Compilers (UFRN, 2026.1), Trabalhos 2 and 3.
+Coursework for DIM0164 - Compilers (UFRN, 2026.1), Trabalhos 1, 2 and 3.
 
 ## Prerequisites
 

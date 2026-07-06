@@ -210,21 +210,9 @@ fn report_lex_errors(errors: &[LexError], suggest: bool) {
             "  lexical error (line {}, column {}): {}",
             e.line, e.column, e.msg
         );
-        if suggest && let Some(hint) = suggest_lexeme_hint(&e.msg) {
+        if suggest && let Some(hint) = &e.suggestion {
             eprintln!("    suggestion: {hint}");
         }
-    }
-}
-
-/// The lexer already embeds "Did you mean" hints in some messages; for the rest
-/// there's no extra structured suggestion to surface.
-fn suggest_lexeme_hint(msg: &str) -> Option<String> {
-    if msg.contains("Did you mean") {
-        None
-    } else if msg.contains("unclosed block comment") {
-        Some("close the comment with '*/'".to_string())
-    } else {
-        None
     }
 }
 

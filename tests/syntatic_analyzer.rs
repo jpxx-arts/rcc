@@ -245,6 +245,33 @@ mod errors {
     }
 }
 
+mod suggestions {
+    use super::*;
+
+    #[test]
+    fn mistyped_keyword_suggests_replacement() {
+        let src = "claas Main { public static void main(String[] a) { x = 1; } }";
+        let err = parse_source(src).unwrap_err();
+        let hint = err.suggestion.as_deref().unwrap();
+        assert_eq!(hint, "replace 'claas' with 'class'");
+    }
+
+    #[test]
+    fn mistyped_while_suggests_the_keyword() {
+        let src = "class Main { public static void main(String[] a) { whle (1 < 2) { x = 1; } } }";
+        let err = parse_source(src).unwrap_err();
+        let hint = err.suggestion.as_deref().unwrap();
+        assert_eq!(hint, "did you mean 'while'?");
+    }
+
+    #[test]
+    fn missing_token_still_suggests_insertion() {
+        let src = "class Main { public static void main(String[] a) { x = 1 } }";
+        let err = parse_source(src).unwrap_err();
+        assert_eq!(err.suggestion.as_deref(), Some("insert ';'"));
+    }
+}
+
 mod e2e_fixtures {
     use super::*;
 

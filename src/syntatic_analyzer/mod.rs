@@ -8,7 +8,7 @@
 //! correction suggestion.
 
 use crate::ast::{ClassDecl, Exp, ExpKind, MainClass, MethodDecl, Program, Stmt, Type, VarDecl};
-use crate::lexical_analyzer::Token;
+use crate::lexical_analyzer::{Token, suggest_keyword};
 use crate::symbol_table::{Category, SymbolTable};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -113,7 +113,16 @@ impl<'a> Parser<'a> {
         if self.peek().is_keyword(kw) {
             Ok(self.advance())
         } else {
-            Err(self.error_expecting(&format!("keyword '{kw}'"), format!("insert '{kw}'")))
+            // A nearby identifier is most likely the keyword mistyped
+            // (`claas` -> `class`); suggest the replacement instead of an
+            // insertion.
+            let tok = self.peek();
+            let hint = if tok.is_id() && suggest_keyword(&tok.lexeme).as_deref() == Some(kw) {
+                format!("replace '{}' with '{kw}'", tok.lexeme)
+            } else {
+                format!("insert '{kw}'")
+            };
+            Err(self.error_expecting(&format!("keyword '{kw}'"), hint))
         }
     }
 
@@ -523,10 +532,16 @@ impl<'a> Parser<'a> {
                 column,
             });
         }
-        Err(self.error_expecting(
-            "'=' or '[' after identifier",
-            "insert '=' or '['".to_string(),
-        ))
+        // `whle (...)`, `fi (...)` and the like reach this point as an
+        // identifier that starts no valid command; point at the keyword the
+        // user probably meant.
+        let hint = match suggest_keyword(&name) {
+            Some(kw) if matches!(kw.as_str(), "if" | "while" | "System") => {
+                format!("did you mean '{kw}'?")
+            }
+            _ => "insert '=' or '['".to_string(),
+        };
+        Err(self.error_expecting("'=' or '[' after identifier", hint))
     }
 
     // ----------------------------------------------------------------
