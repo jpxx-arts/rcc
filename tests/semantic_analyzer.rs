@@ -214,6 +214,58 @@ fn own_field_shadows_inherited_field() {
     ));
 }
 
+// Params and locals share the method scope: duplicates among them are
+// errors (Java semantics per §4.4), unlike the legal cross-scope
+// shadowing of §4.3 covered above.
+#[test]
+fn duplicate_parameter_is_error() {
+    assert_err(
+        &program(
+            "class C {
+                public int f(int x, boolean x) {
+                    int y ;
+                    y = 0 ;
+                    return y ;
+                }
+            }",
+        ),
+        "parameter 'x' is declared more than once",
+    );
+}
+
+#[test]
+fn duplicate_local_is_error() {
+    assert_err(
+        &program(
+            "class C {
+                public int f() {
+                    int y ;
+                    int y ;
+                    y = 0 ;
+                    return y ;
+                }
+            }",
+        ),
+        "local variable 'y' is declared more than once",
+    );
+}
+
+#[test]
+fn local_redeclaring_parameter_is_error() {
+    assert_err(
+        &program(
+            "class C {
+                public int f(int x) {
+                    boolean x ;
+                    x = true ;
+                    return 0 ;
+                }
+            }",
+        ),
+        "local variable 'x' redeclares a parameter",
+    );
+}
+
 // §4.2 of the spec: the professor's dynamic-dispatch example — a
 // superclass-typed variable holding a subclass instance calls the
 // overridden method through the superclass signature.

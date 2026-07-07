@@ -175,7 +175,8 @@ fn check_class_rules(
             check_type_exists(&f.ty, f.line, f.column, classes, errors);
         }
 
-        // Method signature types and override consistency.
+        // Method signature types, duplicate declarations, and override
+        // consistency.
         for m in &class.methods {
             check_type_exists(&m.ret_type, m.line, m.column, classes, errors);
             for p in &m.params {
@@ -184,7 +185,40 @@ fn check_class_rules(
             for l in &m.locals {
                 check_type_exists(&l.ty, l.line, l.column, classes, errors);
             }
+            check_duplicate_declarations(m, errors);
             check_override(class, m, classes, errors);
+        }
+    }
+}
+
+/// Parameters and locals share the method scope, so a name may be declared at
+/// most once among them (Java semantics, which §4.4 of the spec defers to).
+/// Shadowing an *outer* scope (fields, inherited fields) remains legal per
+/// the §4.3 resolution order.
+fn check_duplicate_declarations(method: &MethodDecl, errors: &mut Vec<SemanticError>) {
+    let mut seen: HashMap<&str, &'static str> = HashMap::new();
+    for p in &method.params {
+        if seen.insert(p.name.as_str(), "parameter").is_some() {
+            errors.push(SemanticError {
+                line: p.line,
+                column: p.column,
+                msg: format!("parameter '{}' is declared more than once", p.name),
+            });
+        }
+    }
+    for l in &method.locals {
+        match seen.insert(l.name.as_str(), "local") {
+            Some("parameter") => errors.push(SemanticError {
+                line: l.line,
+                column: l.column,
+                msg: format!("local variable '{}' redeclares a parameter", l.name),
+            }),
+            Some(_) => errors.push(SemanticError {
+                line: l.line,
+                column: l.column,
+                msg: format!("local variable '{}' is declared more than once", l.name),
+            }),
+            None => {}
         }
     }
 }
