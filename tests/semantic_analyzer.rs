@@ -160,6 +160,84 @@ fn undefined_variable() {
     );
 }
 
+// §4.3 of the spec: name resolution order is (1) method parameters,
+// (2) own class fields, (3) inherited fields.
+#[test]
+fn param_shadows_class_field() {
+    // `x` is an `int` field but a `boolean` parameter; using it as boolean
+    // must pass, proving the parameter wins.
+    assert_ok(&program(
+        "class C {
+            int x ;
+            public boolean f(boolean x) {
+                boolean ok ;
+                ok = x && true ;
+                return ok ;
+            }
+        }",
+    ));
+}
+
+#[test]
+fn param_shadows_class_field_negative_control() {
+    // Same shape, but using `x` with the *field's* type must fail — the
+    // parameter (boolean) shadows the int field.
+    assert_err(
+        &program(
+            "class C {
+                int x ;
+                public int f(boolean x) {
+                    int y ;
+                    y = x + 1 ;
+                    return y ;
+                }
+            }",
+        ),
+        "arithmetic operand must be 'int'",
+    );
+}
+
+#[test]
+fn own_field_shadows_inherited_field() {
+    // `y` is boolean in A but int in B; inside B it must resolve to int.
+    assert_ok(&program(
+        "class A {
+            boolean y ;
+        }
+        class B extends A {
+            int y ;
+            public int f() {
+                y = y + 1 ;
+                return y ;
+            }
+        }",
+    ));
+}
+
+// §4.2 of the spec: the professor's dynamic-dispatch example — a
+// superclass-typed variable holding a subclass instance calls the
+// overridden method through the superclass signature.
+#[test]
+fn dynamic_dispatch_professor_example() {
+    assert_ok(&program(
+        "class A {
+            public int f() { int r ; r = 1 ; return r ; }
+        }
+        class B extends A {
+            public int f() { int r ; r = 2 ; return r ; }
+        }
+        class Driver {
+            public int run() {
+                A x ;
+                int res ;
+                x = new B() ;
+                res = x.f() ;
+                return res ;
+            }
+        }",
+    ));
+}
+
 #[test]
 fn inheritance_field_access() {
     // B inherits field `v` from A.

@@ -245,6 +245,47 @@ mod errors {
     }
 }
 
+mod precedence {
+    use super::*;
+
+    /// Parse a program whose main prints `exp` and return the pretty AST.
+    fn ast_of(exp: &str) -> String {
+        let src = format!(
+            "class Main {{ public static void main(String[] a) {{ System.out.println({exp}) ; }} }}"
+        );
+        let lex = lexical_analyzer::tokenize(&src, false);
+        assert!(lex.errors.is_empty(), "lexical errors: {:?}", lex.errors);
+        let (program, _) = syntatic_analyzer::parse(&lex.tokens).expect("should parse");
+        program.pretty()
+    }
+
+    // §4.5 of the spec: precedence is encoded as depth in the AST —
+    // `1 + 2 * 3` must be Add(1, Mul(2, 3)), i.e. evaluate to 7, not 21.
+    #[test]
+    fn mul_binds_tighter_than_add() {
+        let out = ast_of("1 + 2 * 3");
+        let expected = "      Add\n        Num 1\n        Mul\n          Num 2\n          Num 3";
+        assert!(out.contains(expected), "got:\n{out}");
+    }
+
+    // §4.5: same-precedence operators associate left-to-right —
+    // `1 - 2 + 3` must be Add(Sub(1, 2), 3), i.e. 2, not 1 - (2 + 3) = -4.
+    #[test]
+    fn add_sub_are_left_associative() {
+        let out = ast_of("1 - 2 + 3");
+        let expected = "      Add\n        Sub\n          Num 1\n          Num 2\n        Num 3";
+        assert!(out.contains(expected), "got:\n{out}");
+    }
+
+    // `<` binds looser than arithmetic; `&&` binds loosest.
+    #[test]
+    fn relational_and_logical_layering() {
+        let out = ast_of("1 < 2 + 3 && true");
+        let expected = "      And\n        Less\n          Num 1\n          Add\n            Num 2\n            Num 3\n        True";
+        assert!(out.contains(expected), "got:\n{out}");
+    }
+}
+
 mod suggestions {
     use super::*;
 

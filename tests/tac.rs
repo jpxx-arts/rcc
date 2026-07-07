@@ -90,6 +90,16 @@ mod expressions {
         }
     }
 
+    // §4.5 of the spec: left-to-right evaluation with precedence — the 3AC
+    // for `1 - 2 + 3` must compute the subtraction first and feed it into
+    // the addition (result 2, never 1 - (2 + 3)).
+    #[test]
+    fn evaluation_is_left_to_right() {
+        let out = rendered(&main_with("System.out.println(1 - 2 + 3) ;"));
+        assert!(out.contains("t0 = 1 - 2"), "got:\n{out}");
+        assert!(out.contains("t1 = t0 + 3"), "got:\n{out}");
+    }
+
     #[test]
     fn temporaries_are_unique() {
         let (code, symbols) = compile(&main_with(
